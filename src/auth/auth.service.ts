@@ -8,17 +8,11 @@ import { Device, DeviceDocument } from 'src/schemas/device.schema';
 import { Invite, InviteDocument } from 'src/schemas/invite.schema';
 import { Tenant, TenantDocument } from 'src/schemas/tenant.schema';
 import { User, UserDocument } from 'src/schemas/user.schema';
-import { TenantContextDto } from './dto/base/tenant-context.dto';
-import { WebSignupDto } from './dto/web/signup.dto';
-import { CredentialsDto } from './dto/base/credentials.dto';
+import { CredentialsDto, DeviceDto, TenantContextDto, WebSignupDto, MobileSignupDto, WebLoginDto, MobileLoginDto } from './dto';
 import { Role, ROLES } from 'src/common/constants/roles';
-import { create } from 'domain';
-import e from 'express';
 import { ConfigService } from '@nestjs/config';
-import { MobileSignupDto } from './dto/mobile/mobile-signup.dto';
-import { DeviceDto } from './dto/base/device.dto';
-import { WebLoginDto } from './dto/web/login.dto';
-import { MobileLoginDto } from './dto/mobile/mobile-login.dto';
+import { JwtConfig, SecurityConfig } from 'src/config/config.types';
+
 
 @Injectable()
 export class AuthService {
@@ -28,8 +22,9 @@ export class AuthService {
         @InjectModel(User.name) private userModel: Model<UserDocument>,
         @InjectModel(Device.name) private deviceModel: Model<DeviceDocument>,
         private jwtService: JwtService,
-        private configService: ConfigService,
+        private configService: ConfigService<{ jwt: JwtConfig; security: SecurityConfig }>,
 ) {}
+
     // ============================================
     // REGISTRATION
     // ============================================
@@ -92,7 +87,8 @@ export class AuthService {
     async webLogin(context: TenantContextDto, dto: WebLoginDto) {
         const user = await this.validateCredentials(context.tenantId, dto);
         await this.updateLastLogin(user._id.toString());
-        return this.generateTokens(user, 'web');
+        const fullUser = await this.getUserOrThrow(user._id.toString());
+        return this.generateTokens(fullUser, 'web');
     }
 
     async mobileLogin(context: TenantContextDto, dto: MobileLoginDto) {
@@ -103,7 +99,8 @@ export class AuthService {
             device: dto,
          })
         await this.updateLastLogin(user._id.toString());
-        return this.generateTokens(user, 'mobile');
+        const fullUser = await this.getUserOrThrow(user._id.toString());
+        return this.generateTokens(fullUser, 'mobile');
     }
 
     // ============================================
@@ -117,7 +114,7 @@ export class AuthService {
     ) {
         try {
             const payload = await this.jwtService.verifyAsync(refreshToken, {
-                secret: this.configService.get<string>('JWT_REFRESH_SECRET'),
+                secret: this.configService.get<JwtConfig>('jwt', { infer: true })!.refreshSecret,
             });
             if (payload.tenantId !== context.tenantId) {
                 throw new UnauthorizedException('Invalid tenant context');
@@ -250,7 +247,7 @@ export class AuthService {
     // PRIVATE HELPERS
     // ============================================
 
-    async validateCredentials(tenantId: string, credentials: CredentialsDto): Promise<UserDocument> {
+    async validateCredentials(tenantId: string, credentials: CredentialsDto): Promise<Omit<User, "password" | "refreshToken" | "tenantId"> & { _id: any }> {
         const user = await this.userModel.findOne({
             email: credentials.email.toLowerCase().trim(),
             tenantId,
@@ -331,18 +328,22 @@ export class AuthService {
             type: 'access',
         };
 
-        const accessExpiry = type === "mobile" ? "7d" : "15m";
-        const refreshExpiry = type === "mobile" ? "90d" : "7d";
+        const accessExpiry = type === "mobile" ? 
+            this.configService.get<JwtConfig>('jwt', { infer: true })!.mobileAccessExpiry 
+            : this.configService.get<JwtConfig>('jwt', { infer: true })!.accessExpiry;
+        const refreshExpiry = type === "mobile" ? 
+            this.configService.get<JwtConfig>('jwt', { infer: true })!.mobileRefreshExpiry 
+            : this.configService.get<JwtConfig>('jwt', { infer: true })!.refreshExpiry;
 
         const [accessToken, refreshToken] = await Promise.all([
             this.jwtService.signAsync(payload, {
-                secret: this.configService.get<string>('JWT_SECRET'),
+                secret: this.configService.get<JwtConfig>('jwt', { infer: true })!.secret,
                 expiresIn: accessExpiry,
             }),
             this.jwtService.signAsync(
                 { ...payload, type: 'refresh' },
                 {
-                    secret: this.configService.get<string>('JWT_REFRESH_SECRET'),
+                    secret: this.configService.get<JwtConfig>('jwt', { infer: true })!.refreshSecret,
                     expiresIn: refreshExpiry,
                 }
             ),
@@ -376,7 +377,7 @@ export class AuthService {
     }) {
         await this.deviceModel.findOneAndUpdate(
             {deviceId: data.device.deviceId, tenantId: data.tenantId, userId: data.userId},
-            {...data.device,}
+            {...data.device},
             {upsert: true, new: true}
         )
     }

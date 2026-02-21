@@ -21,7 +21,7 @@ export class Invite {
 
     @ApiProperty({ description: 'The role of the invited user' })
     @Prop({ type: [String], default: [ROLES.USER] })
-    role: Role[];
+    roles: Role[];
 
     @ApiProperty({ description: 'The ID of the user who created the invite' })
     @Prop({ required: true })

@@ -43,6 +43,11 @@ export class User {
     @Prop()
     lastLogin?: Date;
 
+    @ApiProperty({ description: 'The created by userId of the user', example: 'admin-123'})
+    @ApiHideProperty() // Hide this property
+    @Prop({required: false})
+    createdBy: string;
+
     @ApiProperty({ description: 'The created at date of the user', example: '2024-01-01T00:00:00.000Z'})
     @ApiHideProperty() // Hide this property
     @Prop()
