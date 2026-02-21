@@ -72,7 +72,7 @@ export class AuthController {
       ? ({ deviceId, deviceName, platform, pushToken } as DeviceDto)
       : undefined;
 
-    return this.authService.refresh({ tenantId: req.tenantId }, refreshToken, device);
+    return this.authService.refreshToken({ tenantId: req.tenantId }, refreshToken, device);
   }
 
   @Post("logout")
