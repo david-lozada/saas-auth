@@ -1,5 +1,6 @@
 // Define roles as const object (no runtime overhead)
 export const ROLES = {
+  SUPERADMIN: 'superadmin',
   USER: 'user',
   ADMIN: 'admin',
   MANAGER: 'manager',

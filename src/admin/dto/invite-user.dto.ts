@@ -1,5 +1,5 @@
 import { IsEmail, IsArray, IsOptional, IsString } from "class-validator";
-import { Role } from "src/common/constants/roles";
+import { Role } from "../../common/constants/roles";
 
 export class InviteUserDto {
     @IsEmail()

@@ -4,14 +4,14 @@ import { Model } from 'mongoose';
 import { ApiProperty } from '@nestjs/swagger';
 import bcrypt from 'bcrypt';
 import { JwtService, TokenExpiredError } from '@nestjs/jwt';
-import { Device, DeviceDocument } from 'src/schemas/device.schema';
-import { Invite, InviteDocument } from 'src/schemas/invite.schema';
-import { Tenant, TenantDocument } from 'src/schemas/tenant.schema';
-import { User, UserDocument } from 'src/schemas/user.schema';
+import { Device, DeviceDocument } from '../schemas/device.schema';
+import { Invite, InviteDocument } from '../schemas/invite.schema';
+import { Tenant, TenantDocument } from '../schemas/tenant.schema';
+import { User, UserDocument } from '../schemas/user.schema';
 import { CredentialsDto, DeviceDto, TenantContextDto, WebSignupDto, MobileSignupDto, WebLoginDto, MobileLoginDto } from './dto';
-import { Role, ROLES } from 'src/common/constants/roles';
+import { Role, ROLES } from '../common/constants/roles';
 import { ConfigService } from '@nestjs/config';
-import { JwtConfig, SecurityConfig } from 'src/config/config.types';
+import { JwtConfig, SecurityConfig } from '../config/config.types';
 
 
 @Injectable()

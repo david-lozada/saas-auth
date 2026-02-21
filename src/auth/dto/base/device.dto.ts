@@ -1,5 +1,5 @@
 import { IsString, IsOptional, IsIn } from "class-validator";
-import * as platforms from "src/common/constants/platforms";
+import * as platforms from "../../../common/constants/platforms";
 
 /**
  * SINGLE SOURCE OF TRUTH for device information

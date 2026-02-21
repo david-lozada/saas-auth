@@ -1,0 +1,191 @@
+version: "3.8"
+
+services:
+  # ==========================================
+  # NestJS Application
+  # ==========================================
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production  # Use production stage
+    container_name: multitenant-api
+    restart: unless-stopped
+    environment:
+      # App Configuration
+      - NODE_ENV=production
+      - PORT=3000
+      
+      # Database (MongoDB replica set for transactions)
+      - MONGODB_URI=mongodb://mongo:27017/multitenant_app?replicaSet=rs0&authSource=admin
+      
+      # JWT Configuration (use secrets in production)
+      - JWT_SECRET=${JWT_SECRET:-change-me-in-production-min-32-chars}
+      - JWT_REFRESH_SECRET=${JWT_REFRESH_SECRET:-change-me-in-production-min-32-chars}
+      - JWT_ACCESS_EXPIRATION=15m
+      - JWT_REFRESH_EXPIRATION_WEB=7d
+      - JWT_REFRESH_EXPIRATION_MOBILE=90d
+      
+      # Security
+      - BCRYPT_ROUNDS=12
+      
+      # Optional: Redis for session management (future scaling)
+      # - REDIS_URL=redis://redis:6379
+    ports:
+      - "3000:3000"
+    networks:
+      - multitenant-network
+      - shared-app-network  # External network for frontend communication
+    depends_on:
+      mongo:
+        condition: service_healthy
+    volumes:
+      - ./logs:/app/logs  # Optional: persistent logs
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # ==========================================
+  # MongoDB with Replica Set (Single Node)
+  # Required for transactions in Mongoose
+  # ==========================================
+  mongo:
+    image: mongo:7.0
+    container_name: multitenant-mongo
+    restart: unless-stopped
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=${MONGO_ROOT_USER:-admin}
+      - MONGO_INITDB_ROOT_PASSWORD=${MONGO_ROOT_PASSWORD:-changeme}
+      - MONGO_INITDB_DATABASE=multitenant_app
+      - MONGO_REPLICA_SET_NAME=rs0
+    ports:
+      - "27017:27017"  # Exposed for local development tools (MongoDB Compass)
+    volumes:
+      - mongo_data:/data/db
+      - mongo_config:/data/configdb
+    networks:
+      - multitenant-network
+    command: ["--replSet", "rs0", "--bind_ip_all", "--port", "27017", "--keyFile", "/data/replica.key"]
+    healthcheck:
+      test: |
+        mongosh --quiet -u $${MONGO_INITDB_ROOT_USERNAME} -p $${MONGO_INITDB_ROOT_PASSWORD} --eval "
+          try { 
+            rs.initiate({ 
+              _id: 'rs0', 
+              members: [{ _id: 0, host: 'mongo:27017' }] 
+            }).ok 
+          } catch (e) { 
+            rs.status().ok 
+          }
+        "
+      interval: 10s
+      timeout: 30s
+      start_period: 0s
+      retries: 30
+
+  # ==========================================
+  # MongoDB Initialization (One-time setup)
+  # Creates app user and indexes
+  # ==========================================
+  mongo-init:
+    image: mongo:7.0
+    container_name: multitenant-mongo-init
+    depends_on:
+      mongo:
+        condition: service_healthy
+    networks:
+      - multitenant-network
+    environment:
+      - MONGO_ROOT_USER=${MONGO_ROOT_USER:-admin}
+      - MONGO_ROOT_PASSWORD=${MONGO_ROOT_PASSWORD:-changeme}
+      - MONGO_APP_USER=${MONGO_APP_USER:-appuser}
+      - MONGO_APP_PASSWORD=${MONGO_APP_PASSWORD:-apppassword}
+    entrypoint: >
+      bash -c "
+        echo 'Waiting for MongoDB to be ready...';
+        sleep 5;
+        mongosh -u $${MONGO_ROOT_USER} -p $${MONGO_ROOT_PASSWORD} --authenticationDatabase admin --eval '
+          db = db.getSiblingDB(\"multitenant_app\");
+          db.createUser({
+            user: \"'$${MONGO_APP_USER}'\",
+            pwd: \"'$${MONGO_APP_PASSWORD}'\",
+            roles: [{ role: \"readWrite\", db: \"multitenant_app\" }]
+          });
+          
+          // Create indexes for performance
+          db.users.createIndex({ email: 1, tenantId: 1 }, { unique: true });
+          db.users.createIndex({ tenantId: 1, roles: 1 });
+          db.devices.createIndex({ userId: 1, tenantId: 1 });
+          db.devices.createIndex({ deviceId: 1, tenantId: 1 });
+          db.tenants.createIndex({ slug: 1 }, { unique: true });
+          db.invites.createIndex({ code: 1, tenantId: 1 }, { unique: true });
+          db.invites.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+          
+          print(\"Database initialized successfully\");
+        ';
+        echo 'Initialization complete';
+      "
+    restart: "no"
+
+  # ==========================================
+  # Optional: Redis for caching/sessions
+  # Uncomment when ready for scaling
+  # ==========================================
+  # redis:
+  #   image: redis:7-alpine
+  #   container_name: multitenant-redis
+  #   restart: unless-stopped
+  #   volumes:
+  #     - redis_data:/data
+  #   networks:
+  #     - multitenant-network
+
+  # ==========================================
+  # Optional: MongoDB Express (DB Admin UI)
+  # Only for development - remove in production
+  # ==========================================
+  mongo-express:
+    image: mongo-express:latest
+    container_name: multitenant-mongo-express
+    restart: unless-stopped
+    environment:
+      - ME_CONFIG_MONGODB_ADMINUSERNAME=${MONGO_ROOT_USER:-admin}
+      - ME_CONFIG_MONGODB_ADMINPASSWORD=${MONGO_ROOT_PASSWORD:-changeme}
+      - ME_CONFIG_MONGODB_URL=mongodb://${MONGO_ROOT_USER:-admin}:${MONGO_ROOT_PASSWORD:-changeme}@mongo:27017/?authSource=admin&replicaSet=rs0
+      - ME_CONFIG_BASICAUTH_USERNAME=admin
+      - ME_CONFIG_BASICAUTH_PASSWORD=pass
+    ports:
+      - "8081:8081"
+    networks:
+      - multitenant-network
+    depends_on:
+      mongo:
+        condition: service_healthy
+    profiles:
+      - dev  # Only start with: docker-compose --profile dev up
+
+# ==========================================
+# Named Volumes
+# ==========================================
+volumes:
+  mongo_data:
+    driver: local
+  mongo_config:
+    driver: local
+  # redis_data:
+  #   driver: local
+
+# ==========================================
+# Networks
+# ==========================================
+networks:
+  multitenant-network:
+    driver: bridge
+    name: multitenant-network  # Predictable name
+  
+  shared-app-network:
+    external: true  # Created by frontend or manually
+    name: shared-app-network

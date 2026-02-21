@@ -15,7 +15,7 @@ import { Request } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
-import { CurrentUser } from 'src/auth/guards/current-user.decorator';
+import { CurrentUser } from '../auth/guards/current-user.decorator';
 import { AdminService } from './admin.service';
 import { CreateUserDto, InviteUserDto } from './dto';
 import { TenantContextDto } from '../auth/dto';

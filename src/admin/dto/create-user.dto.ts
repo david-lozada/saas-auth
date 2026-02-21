@@ -1,5 +1,5 @@
 import { IsEmail, IsString, IsArray, IsOptional, ArrayContains } from "class-validator";
-import { Role, ROLE_VALUES } from "src/common/constants/roles";
+import { Role, ROLE_VALUES } from "../../common/constants/roles";
 
 export class CreateUserDto {
     @IsEmail()

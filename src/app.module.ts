@@ -17,6 +17,7 @@ import { AdminController } from './admin/admin.controller';
 import { AdminModule } from './admin/admin.module';
 import configurations from "./config/configurations";
 import { DatabaseConfig } from "./config/config.types";
+import { BootstrapModule } from './bootstrap/bootstrap.module';
 
 @Module({
   imports: [
@@ -44,8 +45,10 @@ import { DatabaseConfig } from "./config/config.types";
       secret: process.env.JWT_SECRET || "change-this-in-production",
       signOptions: { expiresIn: "15m" },
     }),
+    BootstrapModule,
     AuthModule,
     AdminModule,
+    BootstrapModule,
   ],
   controllers: [TenantController, AdminController],
   providers: [

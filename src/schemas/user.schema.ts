@@ -1,7 +1,7 @@
 import { Prop, Schema, SchemaFactory } from "@nestjs/mongoose";
 import { Document } from "mongoose";
 import { ApiHideProperty, ApiProperty } from "@nestjs/swagger";
-import { Role, ROLE_VALUES, ROLES } from "src/common/constants/roles";
+import { Role, ROLE_VALUES, ROLES } from "../common/constants/roles";
 
 export type UserDocument = User & Document;
 
@@ -18,6 +18,19 @@ export class User {
     @ApiProperty({ description: 'The tenantId of the user', example: 'tenant-123'})
     @Prop({required: true, index: true})
     tenantId: string;
+
+    @ApiProperty({ description: 'The profile of the user', example: { firstName: 'John', lastName: 'Doe' }})
+    @Prop({ type: Object, required: false})
+    profile: {
+        firstName: string;
+        lastName: string;
+    };
+
+    @Prop({ type: Object, required: false })
+    metadata: {
+        isFirstAdmin: boolean,
+        createdVia: string,
+    };
 
     @ApiProperty({ description: 'The roles of the user', example: ['admin', 'user']})
     @Prop({ type: [String], enum: ROLE_VALUES, default: [ROLES.USER] })

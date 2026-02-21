@@ -1,7 +1,7 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document } from 'mongoose';
 import { ApiProperty } from '@nestjs/swagger';
-import { Role, ROLES } from 'src/common/constants/roles';
+import { Role, ROLES } from '../common/constants/roles';
 
 export type InviteDocument = Invite & Document;
 

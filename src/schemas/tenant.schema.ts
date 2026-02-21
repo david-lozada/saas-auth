@@ -25,6 +25,8 @@ export class Tenant {
         themeColor?: string;
         allowedDomains?: string[];
         requireInvite?: boolean;
+        isSystemTenant?: boolean;
+        allowPublicSignup?: boolean;
     };
 
     @ApiProperty({ description: 'The date the tenant was created' })

@@ -1,7 +1,7 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document } from 'mongoose';
 import { ApiHideProperty, ApiProperty } from '@nestjs/swagger';
-import * as platforms from 'src/common/constants/platforms';
+import * as platforms from '../common/constants/platforms';
 
 export type DeviceDocument = Device & Document;
 
