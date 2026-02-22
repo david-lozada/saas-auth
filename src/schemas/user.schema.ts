@@ -33,7 +33,7 @@ export class User {
     };
 
     @ApiProperty({ description: 'The roles of the user', example: ['admin', 'user']})
-    @Prop({ type: [String], enum: ROLE_VALUES, default: [ROLES.USER] })
+    @Prop({ type: [String], enum: Object.values(ROLES), default: [ROLES.USER]})
     roles: Role[];
 
     @ApiProperty({ description: 'The status of the user', example: true})

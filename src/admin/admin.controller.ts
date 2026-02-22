@@ -11,7 +11,7 @@ import {
   HttpCode,
   HttpStatus,
 } from '@nestjs/common';
-import { Request } from 'express';
+import { FastifyRequest } from 'fastify';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -20,8 +20,8 @@ import { AdminService } from './admin.service';
 import { CreateUserDto, InviteUserDto } from './dto';
 import { TenantContextDto } from '../auth/dto';
 
-// Extend Express Request to include tenant and user
-interface AuthenticatedRequest extends Request {
+// Extend FastifyRequest to include tenant and user
+interface AuthenticatedRequest extends FastifyRequest {
   tenantId: string;
   user: {
     userId: string;

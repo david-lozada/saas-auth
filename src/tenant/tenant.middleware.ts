@@ -1,23 +1,23 @@
 import { Injectable, NestMiddleware, BadRequestException } from "@nestjs/common";
-import { Request, Response, NextFunction } from "express";
+import { FastifyRequest, FastifyReply } from "fastify";
 
 @Injectable()
 export class TenantMiddleware implements NestMiddleware {
-  async use(req: Request, res: Response, next: NextFunction) {
+  async use(req: FastifyRequest, res: FastifyReply, next: () => void) {
     let tenantId: string | undefined;
 
     // Header (mobile/web API)
-    const headerTenant = req.headers["x-tenant-id"] as string;
+    const headerTenant = (req.headers as any)["x-tenant-id"] as string;
     if (headerTenant) tenantId = headerTenant;
 
     // Query param
-    if (!tenantId && req.query.tenant) {
-      tenantId = req.query.tenant as string;
+    if (!tenantId && (req.query as any).tenant) {
+      tenantId = (req.query as any).tenant as string;
     }
 
     // Subdomain (web)
-    if (!tenantId && req.headers.host) {
-      const host = req.headers.host;
+    if (!tenantId && (req.headers as any).host) {
+      const host = (req.headers as any).host;
       const subdomain = host.split(".")[0];
       const reserved = ["www", "localhost", "127", "api", "app"];
       if (subdomain && !reserved.includes(subdomain) && !subdomain.includes("localhost")) {
@@ -29,7 +29,7 @@ export class TenantMiddleware implements NestMiddleware {
       throw new BadRequestException("Tenant ID required");
     }
 
-    req["tenantId"] = tenantId.toLowerCase().trim();
+    (req as any)["tenantId"] = tenantId.toLowerCase().trim();
     next();
   }
 }

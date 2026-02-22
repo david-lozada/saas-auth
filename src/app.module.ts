@@ -45,12 +45,11 @@ import { BootstrapModule } from './bootstrap/bootstrap.module';
       secret: process.env.JWT_SECRET || "change-this-in-production",
       signOptions: { expiresIn: "15m" },
     }),
-    BootstrapModule,
     AuthModule,
     AdminModule,
     BootstrapModule,
   ],
-  controllers: [TenantController, AdminController],
+    controllers: [TenantController], // Removed AdminController to prevent duplicate routes
   providers: [
     {
       provide: APP_GUARD,

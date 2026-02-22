@@ -1,111 +1,96 @@
-version: "3.8"
-
 services:
   api:
     build:
       context: ../..
       dockerfile: Dockerfile.dev
-    container_name: saas-auth-api-dev
+      target: development
+    container_name: foodie-api-dev
     restart: unless-stopped
+    ports:
+      - "3000:3000"
     environment:
       - NODE_ENV=development
       - PORT=3000
-      - MONGODB_URI=mongodb://mongo:27017/multitenant_app?replicaSet=rs0&authSource=admin
-      - JWT_SECRET=dev-secret-min-32-characters-long
-      - JWT_REFRESH_SECRET=dev-refresh-secret-min-32-chars
+      - HOST=0.0.0.0
+      - MONGODB_URI=mongodb://mongodb:27017/foodie_dev
+      - JWT_SECRET=dev-jwt-secret-not-secure-12345
+      - JWT_REFRESH_SECRET=dev-refresh-secret-not-secure-12345
       - BCRYPT_ROUNDS=10
-    ports:
-      - "3000:3000"
+      - REDIS_URL=redis://redis:6379
     volumes:
-      # Hot reload: mount source code
       - ../../src:/app/src:ro
       - ../../package.json:/app/package.json:ro
       - ../../pnpm-lock.yaml:/app/pnpm-lock.yaml:ro
-      # pnpm store persistence for faster reinstalls
-      - pnpm-store:/root/.local/share/pnpm/store
-      # Exclude node_modules (use container's)
-      - /app/node_modules
-    networks:
-      - saas-auth-dev-network
-      - saas-shared-network
+      - ../../tsconfig.json:/app/tsconfig.json:ro
+      - ../../nest-cli.json:/app/nest-cli.json:ro
     depends_on:
-      mongo:
+      mongodb:
         condition: service_healthy
-    command: pnpm run start:dev
+      redis:
+        condition: service_started
+    networks:
+      - foodie-dev-network
 
-  mongo:
-    image: mongo:7.0
-    container_name: saas-auth-mongo-dev
+  mongodb:
+    image: mongo:7-jammy
+    container_name: foodie-mongo-dev
     restart: unless-stopped
-    environment:
-      - MONGO_INITDB_ROOT_USERNAME=admin
-      - MONGO_INITDB_ROOT_PASSWORD=devpassword
-      - MONGO_INITDB_DATABASE=multitenant_app
     ports:
       - "27017:27017"
-    volumes:
-      - mongo_dev_data:/data/db
-      - mongo_dev_config:/data/configdb
-      - ../../docker/shared/mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
-    networks:
-      - saas-auth-dev-network
-    command: ["--replSet", "rs0", "--bind_ip_all", "--auth"]
-    healthcheck:
-      test: |
-        mongosh --quiet -u admin -p devpassword --authenticationDatabase admin --eval "
-          try { 
-            rs.initiate({ 
-              _id: 'rs0', 
-              members: [{ _id: 0, host: 'mongo:27017' }] 
-            }).ok 
-          } catch (e) { 
-            rs.status().ok 
-          }
-        "
-      interval: 10s
-      timeout: 30s
-      start_period: 0s
-      retries: 30
-
-  mongo-express:
-    image: mongo-express:latest
-    container_name: saas-auth-mongo-express-dev
-    restart: unless-stopped
     environment:
-      - ME_CONFIG_MONGODB_ADMINUSERNAME=admin
-      - ME_CONFIG_MONGODB_ADMINPASSWORD=devpassword
-      - ME_CONFIG_MONGODB_URL=mongodb://admin:devpassword@mongo:27017/?authSource=admin&replicaSet=rs0
-      - ME_CONFIG_BASICAUTH_USERNAME=admin
-      - ME_CONFIG_BASICAUTH_PASSWORD=pass
-    ports:
-      - "8081:8081"
+      - MONGO_INITDB_DATABASE=foodie_dev
+      - MONGODB_URI=mongodb://mongodb:27017/foodie_dev?replicaSet=rs0&directConnection=true
+    volumes:
+      - mongodb_data:/data/db
+      - ../shared/mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
+    # Start as single-node replica set (no auth, no keyfile)
+    command: >
+      bash -c "
+        mongod --replSet rs0 --bind_ip_all --port 27017 &
+        sleep 5 &&
+        mongosh --eval 'rs.initiate({_id: \"rs0\", members: [{_id: 0, host: \"mongodb:27017\"}]})' || true &&
+        wait
+      "
     networks:
-      - saas-auth-dev-network
-    depends_on:
-      mongo:
-        condition: service_healthy
+      - foodie-dev-network
+    healthcheck:
+      test: >
+        bash -c "mongosh --eval 'rs.status().ok' | grep -q 1"
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
 
   redis:
     image: redis:7-alpine
-    container_name: saas-auth-redis-dev
+    container_name: foodie-redis-dev
     restart: unless-stopped
     ports:
       - "6379:6379"
-    volumes:
-      - redis_dev_data:/data
+    # No requirepass
     networks:
-      - saas-auth-dev-network
+      - foodie-dev-network
+
+  mongo-express:
+    image: mongo-express:latest
+    container_name: foodie-mongo-express-dev
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+    environment:
+      - ME_CONFIG_MONGODB_URL=mongodb://mongodb:27017/
+      - ME_CONFIG_BASICAUTH_USERNAME=admin
+      - ME_CONFIG_BASICAUTH_PASSWORD=admin
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    networks:
+      - foodie-dev-network
 
 volumes:
-  mongo_dev_data:
-  mongo_dev_config:
-  redis_dev_data:
-  pnpm-store:  # Persist pnpm store between restarts
+  mongodb_data:
+  redis_data:
 
 networks:
-  saas-auth-dev-network:
-    name: saas-auth-dev-network
-  
-  saas-shared-network:
-    external: true
-    name: saas-shared-network
+  foodie-dev-network:
+    driver: bridge

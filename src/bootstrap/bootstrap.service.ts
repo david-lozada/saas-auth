@@ -8,6 +8,7 @@ import { User } from '../schemas/user.schema';
 import { Tenant } from '../schemas/tenant.schema';
 import { ConfigService } from '@nestjs/config';
 import { CreateFirstAdminDto } from './dto/create-first-admin.dto';
+import { ROLES } from '../common/constants/roles';
 
 export interface BootstrapToken {
   token: string;
@@ -25,7 +26,8 @@ export class BootstrapService {
     @InjectModel(User.name) private userModel: Model<User>,
     @InjectModel(Tenant.name) private tenantModel: Model<Tenant>,
     private configService: ConfigService,
-  ) {}
+  ) {
+  }
 
   /**
    * Check if system requires initial setup (no users exist)
@@ -144,7 +146,7 @@ export class BootstrapService {
             email: adminData.email.toLowerCase().trim(),
             password: passwordHash,
             tenantId: systemTenant[0]._id.toString(),
-            roles: ['SUPERADMIN'],
+            roles: [ROLES.SUPERADMIN],
             isActive: true,
             mustChangePassword: false,
             profile: {
