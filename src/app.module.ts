@@ -12,6 +12,7 @@ import { DatabaseConfig } from './config/config.types';
 import { BootstrapModule } from './bootstrap/bootstrap.module';
 import { TenantModule } from './tenant/tenant.module';
 import { envValidationSchema } from './config/env.validation';
+import { SubscriptionModule } from './subscription/subscription.module';
 
 @Module({
   imports: [
@@ -41,7 +42,9 @@ import { envValidationSchema } from './config/env.validation';
     AdminModule,
     BootstrapModule,
     TenantModule,
+    SubscriptionModule,
   ],
+
   controllers: [],
   providers: [
     {
@@ -56,6 +59,14 @@ import { envValidationSchema } from './config/env.validation';
 })
 export class AppModule {
   configure(consumer: MiddlewareConsumer) {
-    consumer.apply(TenantMiddleware).exclude('tenants/*path').forRoutes('*');
+    consumer
+      .apply(TenantMiddleware)
+      .exclude(
+        'tenants/*path',
+        'subscriptions/webhook',
+        'subscriptions/binance',
+      )
+
+      .forRoutes('*');
   }
 }

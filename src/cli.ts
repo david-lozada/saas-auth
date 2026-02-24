@@ -2,6 +2,7 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { BootstrapService } from './bootstrap/bootstrap.service';
+import { SeedService } from './bootstrap/seed.service';
 import * as crypto from 'crypto';
 import * as readline from 'readline';
 
@@ -197,8 +198,17 @@ async function bootstrap() {
       setupToken: token,
     });
 
+    // ⭐ NEW: Seed subscription plans
+    console.log('\n=================================================');
+    console.log('🌱 SEEDING SUBSCRIPTION PLANS');
+    console.log('=================================================');
+    const seedService = app.get(SeedService);
+    await seedService.seedPlans();
+    console.log('=================================================\n');
+
     // Success output
     console.log('\n=================================================');
+
     console.log('✅ SUPER ADMIN CREATED SUCCESSFULLY');
     console.log('=================================================');
     console.log(`📧 Email:      ${result.user.email}`);

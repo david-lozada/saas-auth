@@ -11,7 +11,8 @@ const appConfig = registerAs('app', () => ({
 
 const jwtConfig = registerAs('jwt', () => ({
   secret: process.env.JWT_SECRET || 'change-this-in-production-min-32-chars',
-  refreshSecret: process.env.JWT_REFRESH_SECRET || 'another-secret-min-32-chars',
+  refreshSecret:
+    process.env.JWT_REFRESH_SECRET || 'another-secret-min-32-chars',
   accessExpiry: process.env.JWT_ACCESS_EXPIRY || '15m',
   refreshExpiry: process.env.JWT_REFRESH_EXPIRY || '7d',
   mobileAccessExpiry: process.env.JWT_MOBILE_ACCESS_EXPIRY || '7d',
@@ -24,4 +25,25 @@ const securityConfig = registerAs('security', () => ({
   lockoutDuration: parseInt(process.env.LOCKOUT_DURATION!, 10) || 15, // minutes
 }));
 
-export default [appConfig, jwtConfig, securityConfig, databaseConfig]; 
+const stripeConfig = registerAs('stripe', () => ({
+  secretKey: process.env.STRIPE_SECRET_KEY,
+  webhookSecret: process.env.STRIPE_WEBHOOK_SECRET,
+  successUrl: process.env.STRIPE_SUCCESS_URL,
+  cancelUrl: process.env.STRIPE_CANCEL_URL,
+}));
+
+const binanceConfig = registerAs('binance', () => ({
+  apiKey: process.env.BINANCE_API_KEY,
+  secretKey: process.env.BINANCE_SECRET_KEY,
+  successUrl: process.env.BINANCE_SUCCESS_URL,
+  cancelUrl: process.env.BINANCE_CANCEL_URL,
+}));
+
+export default [
+  appConfig,
+  jwtConfig,
+  securityConfig,
+  databaseConfig,
+  stripeConfig,
+  binanceConfig,
+];

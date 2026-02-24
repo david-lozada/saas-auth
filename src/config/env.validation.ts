@@ -21,4 +21,12 @@ export const envValidationSchema = Joi.object({
       otherwise: Joi.optional(),
     })
     .description('Required only in production for initial setup'),
+  STRIPE_SECRET_KEY: Joi.string().optional(),
+  STRIPE_WEBHOOK_SECRET: Joi.string().optional(),
+  STRIPE_SUCCESS_URL: Joi.string().uri().optional(),
+  STRIPE_CANCEL_URL: Joi.string().uri().optional(),
+  BINANCE_API_KEY: Joi.string().optional(),
+  BINANCE_SECRET_KEY: Joi.string().optional(),
+  BINANCE_SUCCESS_URL: Joi.string().uri().optional(),
+  BINANCE_CANCEL_URL: Joi.string().uri().optional(),
 });
