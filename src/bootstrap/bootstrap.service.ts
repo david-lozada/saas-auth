@@ -1,113 +1,131 @@
 // src/bootstrap/bootstrap.service.ts
-import { Injectable, Logger, ConflictException } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  ConflictException,
+  UnauthorizedException,
+  GoneException,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import * as crypto from 'crypto';
 import * as bcrypt from 'bcrypt';
-import { User } from '../schemas/user.schema';
-import { Tenant } from '../schemas/tenant.schema';
+import { User, UserDocument } from '../schemas/user.schema';
+import { SetupToken, SetupTokenDocument } from '../schemas/setup-token.schema';
 import { ConfigService } from '@nestjs/config';
 import { CreateFirstAdminDto } from './dto/create-first-admin.dto';
 import { ROLES } from '../common/constants/roles';
 
-export interface BootstrapToken {
-  token: string;
-  expiresAt: Date;
-  setupUrl: string;
-}
-
 @Injectable()
 export class BootstrapService {
   private readonly logger = new Logger(BootstrapService.name);
-  private setupToken: string | null = null;
-  private tokenExpiresAt: Date | null = null;
 
   constructor(
-    @InjectModel(User.name) private userModel: Model<User>,
-    @InjectModel(Tenant.name) private tenantModel: Model<Tenant>,
+    @InjectModel(User.name) private userModel: Model<UserDocument>,
+    @InjectModel(SetupToken.name)
+    private setupTokenModel: Model<SetupTokenDocument>,
     private configService: ConfigService,
-  ) {
-  }
+  ) {}
 
   /**
-   * Check if system requires initial setup (no users exist)
+   * Check if system requires initial setup (no super admins exist)
    */
   async requiresSetup(): Promise<boolean> {
-    const userCount = await this.userModel.countDocuments();
-    return userCount === 0;
+    const superAdminCount = await this.userModel.countDocuments({
+      roles: { $in: [ROLES.SUPERADMIN] },
+    });
+    return superAdminCount === 0;
   }
 
   /**
-   * Generate one-time setup token for first admin creation
-   * Only works if no users exist in system
+   * Generate single-use setup token
    */
-  async generateSetupToken(): Promise<BootstrapToken> {
-    // Verify system is in setup mode
+  async generateSetupToken(): Promise<{ token: string; expiresAt: Date }> {
     if (!(await this.requiresSetup())) {
       throw new ConflictException(
         'System already initialized. Use admin panel to create users.',
       );
     }
 
-    // Generate cryptographically secure token
-    this.setupToken = crypto.randomBytes(32).toString('hex');
-    this.tokenExpiresAt = new Date(Date.now() + 1000 * 60 * 30); // 30 minutes
+    // Clean up any existing unused tokens
+    await this.setupTokenModel.deleteMany({ used: false });
+
+    const rawToken = crypto.randomBytes(32).toString('hex');
+    const tokenHash = crypto
+      .createHash('sha256')
+      .update(rawToken)
+      .digest('hex');
+    const expiresAt = new Date(Date.now() + 1000 * 60 * 30); // 30 minutes
+
+    await this.setupTokenModel.create({
+      tokenHash,
+      expiresAt,
+      used: false,
+    });
 
     const port = this.configService.get('PORT', 3000);
-    const setupUrl = `http://localhost:${port}/bootstrap/setup?token=${this.setupToken}`;
 
     this.logger.log('');
     this.logger.log('=================================================');
-    this.logger.log('🔑 SETUP TOKEN GENERATED');
-    this.logger.log(`⏱️  Valid until: ${this.tokenExpiresAt.toISOString()}`);
-    this.logger.log('');
-    this.logger.log('📋 Setup URL:');
-    this.logger.log(setupUrl);
-    this.logger.log('');
-    this.logger.log('💡 Or use this token in API call:');
-    this.logger.log(`Token: ${this.setupToken}`);
+    this.logger.log('🔑 SINGLE-USE SETUP TOKEN GENERATED');
+    this.logger.log(`⏱️  Valid until: ${expiresAt.toISOString()}`);
+    this.logger.log('⚠️  This token can only be used ONCE');
     this.logger.log('=================================================');
 
-    return {
-      token: this.setupToken,
-      expiresAt: this.tokenExpiresAt,
-      setupUrl,
-    };
+    return { token: rawToken, expiresAt };
   }
 
   /**
-   * Validate setup token
+   * Validate and consume setup token (atomic operation)
    */
-  validateSetupToken(token: string): boolean {
-    if (!this.setupToken || !this.tokenExpiresAt) {
+  private async consumeSetupToken(rawToken: string): Promise<boolean> {
+    const tokenHash = crypto
+      .createHash('sha256')
+      .update(rawToken)
+      .digest('hex');
+
+    const tokenDoc = await this.setupTokenModel.findOneAndUpdate(
+      {
+        tokenHash,
+        used: false,
+        expiresAt: { $gt: new Date() },
+      },
+      {
+        $set: { used: true, usedAt: new Date() },
+      },
+      { new: true },
+    );
+
+    if (!tokenDoc) {
+      const usedToken = await this.setupTokenModel.findOne({
+        tokenHash,
+        used: true,
+      });
+      if (usedToken) {
+        this.logger.warn(
+          `Attempt to reuse setup token at ${new Date().toISOString()}`,
+        );
+        throw new GoneException('Token already used. Generate a new token.');
+      }
       return false;
     }
-    if (new Date() > this.tokenExpiresAt) {
-      this.setupToken = null;
-      return false;
-    }
-    // Timing-safe comparison to prevent timing attacks
-    try {
-      return crypto.timingSafeEqual(
-        Buffer.from(token, 'hex'),
-        Buffer.from(this.setupToken, 'hex'),
-      );
-    } catch {
-      // Buffer length mismatch or other error
-      return false;
-    }
+
+    return true;
   }
 
   /**
-   * Create first superadmin with system tenant
+   * Create first super admin - NO TENANT, global scope
    */
-  async createFirstAdmin(adminData: CreateFirstAdminDto): Promise<{ user: User; tenant: Tenant }> {
-    // Validate token first
-    if (!this.validateSetupToken(adminData.setupToken)) {
-      throw new Error('Invalid or expired setup token');
+  async createFirstAdmin(
+    dto: CreateFirstAdminDto,
+  ): Promise<{ user: UserDocument }> {
+    // Validate and consume token (single-use)
+    const isValid = await this.consumeSetupToken(dto.setupToken);
+    if (!isValid) {
+      throw new UnauthorizedException('Invalid setup token');
     }
 
-    // Double-check no users exist (race condition protection)
+    // Double-check no super admins exist
     if (!(await this.requiresSetup())) {
       throw new ConflictException('System already initialized');
     }
@@ -116,42 +134,24 @@ export class BootstrapService {
     session.startTransaction();
 
     try {
-      // 1. Create system tenant first
-      const systemTenant = await this.tenantModel.create(
-        [
-          {
-            name: 'System Administration',
-            slug: 'system',
-            isActive: true,
-            settings: {
-              isSystemTenant: true,
-              allowPublicSignup: false,
-              requireInvite: true,
-            },
-          },
-        ],
-        { session },
-      );
-
-      // 2. Hash password
       const bcryptRounds = this.configService.getOrThrow<number>(
         'security.bcryptRounds',
       );
-      const passwordHash = await bcrypt.hash(adminData.password, bcryptRounds);
+      const passwordHash = await bcrypt.hash(dto.password, bcryptRounds);
 
-      // 3. Create superadmin user
+      // ⭐ Create super admin WITHOUT tenantId (global admin)
       const [adminUser] = await this.userModel.create(
         [
           {
-            email: adminData.email.toLowerCase().trim(),
+            email: dto.email.toLowerCase().trim(),
             password: passwordHash,
-            tenantId: systemTenant[0]._id.toString(),
+            // ⭐ NO tenantId field - super admins are global!
             roles: [ROLES.SUPERADMIN],
             isActive: true,
             mustChangePassword: false,
             profile: {
-              firstName: adminData.firstName,
-              lastName: adminData.lastName,
+              firstName: dto.firstName,
+              lastName: dto.lastName,
             },
             metadata: {
               isFirstAdmin: true,
@@ -164,16 +164,10 @@ export class BootstrapService {
 
       await session.commitTransaction();
 
-      // Invalidate token immediately after use (one-time use)
-      this.setupToken = null;
-      this.tokenExpiresAt = null;
+      this.logger.log(`✅ First super admin created: ${adminUser.email}`);
+      this.logger.log('🔒 Setup token consumed and invalidated');
 
-      this.logger.log(`✅ First admin created: ${adminUser.email} (Tenant: ${systemTenant[0].slug})`);
-
-      return {
-        user: adminUser,
-        tenant: systemTenant[0],
-      };
+      return { user: adminUser }; // ⭐ Only user, no tenant
     } catch (error) {
       await session.abortTransaction();
       throw error;

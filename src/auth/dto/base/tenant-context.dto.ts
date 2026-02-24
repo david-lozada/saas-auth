@@ -1,4 +1,4 @@
-import { IsString } from "class-validator";
+import { IsString, IsBoolean, IsOptional, IsObject } from 'class-validator';
 
 /**
  * Attached by middleware, used throughout services
@@ -6,4 +6,14 @@ import { IsString } from "class-validator";
 export class TenantContextDto {
   @IsString()
   tenantId: string;
+
+  @IsString()
+  slug: string;
+
+  @IsBoolean()
+  isSystemTenant: boolean;
+
+  @IsOptional()
+  @IsObject()
+  settings?: any;
 }

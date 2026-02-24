@@ -7,10 +7,11 @@ import {
   BadRequestException,
   ConflictException,
   Logger,
+  UnauthorizedException,
+  GoneException,
 } from '@nestjs/common';
 import { BootstrapService } from './bootstrap.service';
 import { CreateFirstAdminDto } from './dto/create-first-admin.dto';
-
 
 @Controller('bootstrap')
 export class BootstrapController {
@@ -29,7 +30,26 @@ export class BootstrapController {
   }
 
   /**
-   * Create first admin (only works with valid setup token)
+   * Generate single-use setup token
+   */
+  @Get('token')
+  async generateToken(): Promise<{ token: string; expiresAt: Date; warning: string }> {
+    try {
+      const result = await this.bootstrapService.generateSetupToken();
+      return {
+        ...result,
+        warning: 'This token can only be used ONCE. Save it securely.',
+      };
+    } catch (error) {
+      if (error instanceof ConflictException) {
+        throw new ConflictException('System already initialized');
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Create first admin (consumes token - single use!)
    */
   @Post('setup')
   async createFirstAdmin(@Body() dto: CreateFirstAdminDto) {
@@ -38,27 +58,31 @@ export class BootstrapController {
 
       return {
         success: true,
-        message: 'System initialized successfully',
+        message: 'System initialized successfully. Token consumed.',
         user: {
+          id: result.user._id,
           email: result.user.email,
           roles: result.user.roles,
         },
-        tenant: {
-          name: result.tenant.name,
-          slug: result.tenant.slug,
-        },
+        warning: 'This setup token has been permanently invalidated.',
         nextSteps: [
-          'Login at POST /auth/web/login',
-          'Create tenants via POST /admin/tenants',
-          'Invite users via POST /admin/invites',
+          'Login: POST /auth/super-admin/login with x-tenant-id: system',
+          'Create tenants: POST /admin/tenants',
+          'Invite users: POST /admin/invites',
         ],
       };
     } catch (error) {
       if (error instanceof ConflictException) {
         throw new ConflictException('System already initialized');
       }
+      if (error instanceof GoneException) {
+        throw new GoneException('Token already used. Generate a new token at GET /bootstrap/token');
+      }
+      if (error instanceof UnauthorizedException) {
+        throw new UnauthorizedException('Invalid or expired setup token');
+      }
       this.logger.error('Bootstrap failed:', error.message);
-      throw new BadRequestException('Invalid setup token or data');
+      throw new BadRequestException('Failed to create admin');
     }
   }
 }

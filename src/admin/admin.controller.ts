@@ -3,11 +3,9 @@ import {
   Post,
   Get,
   Body,
-  Req,
   UseGuards,
   Param,
   Patch,
-  Delete,
   HttpCode,
   HttpStatus,
 } from '@nestjs/common';
@@ -18,11 +16,11 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/guards/current-user.decorator';
 import { AdminService } from './admin.service';
 import { CreateUserDto, InviteUserDto } from './dto';
+import { TenantContext } from '../auth/decorators/tenant-context.decorator';
 import { TenantContextDto } from '../auth/dto';
 
-// Extend FastifyRequest to include tenant and user
+// Extend FastifyRequest to include user
 interface AuthenticatedRequest extends FastifyRequest {
-  tenantId: string;
   user: {
     userId: string;
     email: string;
@@ -39,50 +37,42 @@ export class AdminController {
   @Post('users')
   @Roles('admin')
   async createUser(
-    @Req() req: AuthenticatedRequest,
+    @TenantContext() context: TenantContextDto,
     @CurrentUser() user: AuthenticatedRequest['user'],
     @Body() dto: CreateUserDto,
   ) {
-    return this.adminService.createUser(
-      { tenantId: req.tenantId },
-      user.userId,
-      dto,
-    );
+    return this.adminService.createUser(context, user.userId, dto);
   }
 
   @Get('users')
   @Roles('admin')
   async listUsers(
-    @Req() req: AuthenticatedRequest,
+    @TenantContext() context: TenantContextDto,
     @CurrentUser() user: AuthenticatedRequest['user'],
   ) {
-    return this.adminService.listUsers({ tenantId: req.tenantId }, user.userId);
+    return this.adminService.listUsers(context, user.userId);
   }
 
   @Get('users/:id')
   @Roles('admin')
   async getUserDetails(
-    @Req() req: AuthenticatedRequest,
+    @TenantContext() context: TenantContextDto,
     @CurrentUser() user: AuthenticatedRequest['user'],
     @Param('id') userId: string,
   ) {
-    return this.adminService.getUserDetails(
-      { tenantId: req.tenantId },
-      user.userId,
-      userId,
-    );
+    return this.adminService.getUserDetails(context, user.userId, userId);
   }
 
   @Patch('users/:id/roles')
   @Roles('admin')
   async updateUserRoles(
-    @Req() req: AuthenticatedRequest,
+    @TenantContext() context: TenantContextDto,
     @CurrentUser() user: AuthenticatedRequest['user'],
     @Param('id') userId: string,
     @Body('roles') roles: string[],
   ) {
     return this.adminService.updateUserRoles(
-      { tenantId: req.tenantId },
+      context,
       user.userId,
       userId,
       roles,
@@ -93,70 +83,51 @@ export class AdminController {
   @Roles('admin')
   @HttpCode(HttpStatus.OK)
   async deactivateUser(
-    @Req() req: AuthenticatedRequest,
+    @TenantContext() context: TenantContextDto,
     @CurrentUser() user: AuthenticatedRequest['user'],
     @Param('id') userId: string,
   ) {
-    return this.adminService.deactivateUser(
-      { tenantId: req.tenantId },
-      user.userId,
-      userId,
-    );
+    return this.adminService.deactivateUser(context, user.userId, userId);
   }
 
   @Post('users/:id/reactivate')
   @Roles('admin')
   @HttpCode(HttpStatus.OK)
   async reactivateUser(
-    @Req() req: AuthenticatedRequest,
+    @TenantContext() context: TenantContextDto,
     @CurrentUser() user: AuthenticatedRequest['user'],
     @Param('id') userId: string,
   ) {
-    return this.adminService.reactivateUser(
-      { tenantId: req.tenantId },
-      user.userId,
-      userId,
-    );
+    return this.adminService.reactivateUser(context, user.userId, userId);
   }
 
   @Post('invites')
   @Roles('admin')
   async inviteUser(
-    @Req() req: AuthenticatedRequest,
+    @TenantContext() context: TenantContextDto,
     @CurrentUser() user: AuthenticatedRequest['user'],
     @Body() dto: InviteUserDto,
   ) {
-    return this.adminService.inviteUser(
-      { tenantId: req.tenantId },
-      user.userId,
-      dto,
-    );
+    return this.adminService.inviteUser(context, user.userId, dto);
   }
 
   @Post('devices/:deviceId/revoke')
   @Roles('admin')
   @HttpCode(HttpStatus.OK)
   async revokeDevice(
-    @Req() req: AuthenticatedRequest,
+    @TenantContext() context: TenantContextDto,
     @CurrentUser() user: AuthenticatedRequest['user'],
     @Param('deviceId') deviceId: string,
   ) {
-    return this.adminService.revokeDevice(
-      { tenantId: req.tenantId },
-      user.userId,
-      deviceId,
-    );
+    return this.adminService.revokeDevice(context, user.userId, deviceId);
   }
 
   @Get('stats')
   @Roles('admin')
   async getTenantStats(
-    @Req() req: AuthenticatedRequest,
+    @TenantContext() context: TenantContextDto,
     @CurrentUser() user: AuthenticatedRequest['user'],
   ) {
-    return this.adminService.getTenantStats(
-      { tenantId: req.tenantId },
-      user.userId,
-    );
+    return this.adminService.getTenantStats(context, user.userId);
   }
 }
