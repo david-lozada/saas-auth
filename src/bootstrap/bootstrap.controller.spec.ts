@@ -8,7 +8,12 @@ describe('BootstrapController', () => {
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       controllers: [BootstrapController],
-      providers: [BootstrapService],
+      providers: [
+        {
+          provide: BootstrapService,
+          useValue: {},
+        },
+      ],
     }).compile();
 
     controller = module.get<BootstrapController>(BootstrapController);

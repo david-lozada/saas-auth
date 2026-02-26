@@ -7,17 +7,13 @@ import {
   Logger,
 } from '@nestjs/common';
 import { FastifyRequest, FastifyReply } from 'fastify';
-import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
-import { Tenant, TenantDocument } from '../schemas/tenant.schema';
+import { TenantRepository } from './repositories/tenant.repository';
 
 @Injectable()
 export class TenantMiddleware implements NestMiddleware {
   private readonly logger = new Logger(TenantMiddleware.name);
 
-  constructor(
-    @InjectModel(Tenant.name) private tenantModel: Model<TenantDocument>,
-  ) {}
+  constructor(private tenantRepository: TenantRepository) {}
 
   async use(req: FastifyRequest, res: FastifyReply, next: () => void) {
     let tenantId: string | undefined;
@@ -68,19 +64,15 @@ export class TenantMiddleware implements NestMiddleware {
     }
 
     // Verify regular tenant exists
-    const tenant = await this.tenantModel
-      .findOne({
-        $or: [{ slug: normalizedTenantId }, { _id: normalizedTenantId }],
-        isActive: true,
-      })
-      .lean();
+    const tenant =
+      await this.tenantRepository.findByIdOrSlugLean(normalizedTenantId);
 
     if (!tenant) {
       throw new UnauthorizedException('Invalid or inactive tenant');
     }
 
     (req as any).tenantContext = {
-      tenantId: tenant._id.toString(),
+      tenantId: (tenant as any)._id.toString(),
       slug: tenant.slug,
       settings: tenant.settings || {},
       isSystemTenant: false,

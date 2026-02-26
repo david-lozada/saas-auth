@@ -4,8 +4,8 @@ import {
   BadRequestException,
   Logger,
 } from '@nestjs/common';
-import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { PlanRepository } from './repositories/plan.repository';
+import { TenantRepository } from '../tenant/repositories/tenant.repository';
 import { Plan, PlanDocument } from '../schemas/plan.schema';
 import { Tenant, TenantDocument } from '../schemas/tenant.schema';
 import { TenantContextDto } from '../auth/dto';
@@ -18,8 +18,8 @@ export class SubscriptionService {
   private readonly logger = new Logger(SubscriptionService.name);
 
   constructor(
-    @InjectModel(Plan.name) private planModel: Model<PlanDocument>,
-    @InjectModel(Tenant.name) private tenantModel: Model<TenantDocument>,
+    private planRepository: PlanRepository,
+    private tenantRepository: TenantRepository,
     private stripeService: StripeService,
     private binancePayService: BinancePayService,
     private configService: ConfigService,
@@ -27,8 +27,8 @@ export class SubscriptionService {
 
   async createCheckoutSession(context: TenantContextDto, planId: string) {
     const [tenant, plan] = await Promise.all([
-      this.tenantModel.findById(context.tenantId),
-      this.planModel.findById(planId),
+      this.tenantRepository.findById(context.tenantId),
+      this.planRepository.findById(planId),
     ]);
 
     if (!tenant) throw new NotFoundException('Tenant not found');
@@ -46,7 +46,7 @@ export class SubscriptionService {
         { tenantId: tenant._id.toString() },
       );
       customerId = customer.id;
-      await this.tenantModel.findByIdAndUpdate(context.tenantId, {
+      await this.tenantRepository.findByIdAndUpdate(context.tenantId, {
         'subscription.customerId': customerId,
       });
     }
@@ -66,8 +66,8 @@ export class SubscriptionService {
 
   async createBinanceOrder(context: TenantContextDto, planId: string) {
     const [tenant, plan] = await Promise.all([
-      this.tenantModel.findById(context.tenantId),
-      this.planModel.findById(planId),
+      this.tenantRepository.findById(context.tenantId),
+      this.planRepository.findById(planId),
     ]);
 
     if (!tenant || !plan)
@@ -86,7 +86,7 @@ export class SubscriptionService {
   }
 
   async createPortalSession(context: TenantContextDto) {
-    const tenant = await this.tenantModel.findById(context.tenantId);
+    const tenant = await this.tenantRepository.findById(context.tenantId);
     if (!tenant || !tenant.subscription?.customerId) {
       throw new BadRequestException('No Stripe customer found for this tenant');
     }
@@ -106,7 +106,7 @@ export class SubscriptionService {
     switch (event.type) {
       case 'checkout.session.completed':
         if (metadata.tenantId && metadata.planId) {
-          await this.tenantModel.findByIdAndUpdate(metadata.tenantId, {
+          await this.tenantRepository.findByIdAndUpdate(metadata.tenantId, {
             plan: metadata.planId,
             'subscription.status': 'active',
             'subscription.subscriptionId': session.subscription,
@@ -115,9 +115,9 @@ export class SubscriptionService {
         break;
 
       case 'customer.subscription.deleted':
-        await this.tenantModel.findOneAndUpdate(
-          { 'subscription.subscriptionId': session.id },
-          { 'subscription.status': 'canceled' },
+        await this.tenantRepository.updateSubscriptionStatusBySubId(
+          session.id,
+          'canceled',
         );
         break;
 
@@ -143,14 +143,13 @@ export class SubscriptionService {
   }
 
   async listPlans() {
-    return this.planModel.find({ isActive: true }).sort({ amount: 1 });
+    return this.planRepository.findActivePlans();
   }
 
   async getTenantSubscription(context: TenantContextDto) {
-    const tenant = await this.tenantModel
-      .findById(context.tenantId)
-      .populate('plan')
-      .exec();
+    const tenant = await this.tenantRepository.findByIdWithPlan(
+      context.tenantId,
+    );
 
     if (!tenant) {
       throw new NotFoundException('Tenant not found');
@@ -163,31 +162,25 @@ export class SubscriptionService {
   }
 
   async updateTenantPlan(context: TenantContextDto, planId: string) {
-    const plan = await this.planModel.findById(planId);
+    const plan = await this.planRepository.findById(planId);
     if (!plan) {
       throw new NotFoundException('Plan not found');
     }
 
-    const tenant = await this.tenantModel
-      .findByIdAndUpdate(
-        context.tenantId,
-        {
-          plan: planId,
-          'subscription.status': 'active', // Simplified for now
-        },
-        { new: true },
-      )
-      .populate('plan');
+    const tenant = await this.tenantRepository.findByIdAndUpdateWithPlan(
+      context.tenantId,
+      {
+        plan: planId,
+        'subscription.status': 'active', // Simplified for now
+      },
+    );
 
     return tenant;
   }
 
   // Helper to check if tenant has a specific feature
   async hasFeature(tenantId: string, feature: string): Promise<boolean> {
-    const tenant = await this.tenantModel
-      .findById(tenantId)
-      .populate('plan')
-      .lean();
+    const tenant = await this.tenantRepository.findByIdWithPlanLean(tenantId);
 
     if (!tenant || !tenant.plan) return false;
 
@@ -227,7 +220,7 @@ export class SubscriptionService {
     planId: string,
     metadata: any,
   ) {
-    const plan = await this.planModel.findById(planId);
+    const plan = await this.planRepository.findById(planId);
     if (!plan) throw new NotFoundException('Plan not found');
 
     // Calculate expiration date
@@ -240,23 +233,20 @@ export class SubscriptionService {
       expirationDate.setFullYear(expirationDate.getFullYear() + 100);
     }
 
-    const updatedTenant = await this.tenantModel
-      .findByIdAndUpdate(
-        tenantId,
-        {
-          plan: planId,
-          'subscription.status': 'active',
-          'subscription.currentPeriodEnd': expirationDate,
-          'subscription.lastPaymentMethod': metadata.paymentMethod,
-          'subscription.lastTransactionId': metadata.transactionId,
-          'subscription.metadata': {
-            ...metadata,
-            activatedAt: new Date(),
-          },
+    const updatedTenant = await this.tenantRepository.findByIdAndUpdateWithPlan(
+      tenantId,
+      {
+        plan: planId,
+        'subscription.status': 'active',
+        'subscription.currentPeriodEnd': expirationDate,
+        'subscription.lastPaymentMethod': metadata.paymentMethod,
+        'subscription.lastTransactionId': metadata.transactionId,
+        'subscription.metadata': {
+          ...metadata,
+          activatedAt: new Date(),
         },
-        { new: true },
-      )
-      .populate('plan');
+      },
+    );
 
     this.logger.log(
       `Subscription activated for tenant ${tenantId} on plan ${plan.name}`,
@@ -265,7 +255,7 @@ export class SubscriptionService {
   }
 
   async checkSubscriptionWarning(tenantId: string) {
-    const tenant = await this.tenantModel.findById(tenantId).lean();
+    const tenant = await this.tenantRepository.findByIdLean(tenantId);
     if (!tenant || !tenant.subscription?.currentPeriodEnd) return null;
 
     const today = new Date();

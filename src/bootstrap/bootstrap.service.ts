@@ -6,24 +6,22 @@ import {
   UnauthorizedException,
   GoneException,
 } from '@nestjs/common';
-import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
 import * as crypto from 'crypto';
 import * as bcrypt from 'bcrypt';
-import { User, UserDocument } from '../schemas/user.schema';
-import { SetupToken, SetupTokenDocument } from '../schemas/setup-token.schema';
+import { UserDocument } from '../schemas/user.schema';
 import { ConfigService } from '@nestjs/config';
 import { CreateFirstAdminDto } from './dto/create-first-admin.dto';
 import { ROLES } from '../common/constants/roles';
+import { UserRepository } from '../auth/repositories/user.repository';
+import { SetupTokenRepository } from './repositories/setup-token.repository';
 
 @Injectable()
 export class BootstrapService {
   private readonly logger = new Logger(BootstrapService.name);
 
   constructor(
-    @InjectModel(User.name) private userModel: Model<UserDocument>,
-    @InjectModel(SetupToken.name)
-    private setupTokenModel: Model<SetupTokenDocument>,
+    private userRepository: UserRepository,
+    private setupTokenRepository: SetupTokenRepository,
     private configService: ConfigService,
   ) {}
 
@@ -31,10 +29,10 @@ export class BootstrapService {
    * Check if system requires initial setup (no super admins exist)
    */
   async requiresSetup(): Promise<boolean> {
-    const superAdminCount = await this.userModel.countDocuments({
+    const superAdmins = await this.userRepository.find({
       roles: { $in: [ROLES.SUPERADMIN] },
     });
-    return superAdminCount === 0;
+    return superAdmins.length === 0;
   }
 
   /**
@@ -48,7 +46,7 @@ export class BootstrapService {
     }
 
     // Clean up any existing unused tokens
-    await this.setupTokenModel.deleteMany({ used: false });
+    await this.setupTokenRepository.deleteMany({ used: false });
 
     const rawToken = crypto.randomBytes(32).toString('hex');
     const tokenHash = crypto
@@ -57,7 +55,7 @@ export class BootstrapService {
       .digest('hex');
     const expiresAt = new Date(Date.now() + 1000 * 60 * 30); // 30 minutes
 
-    await this.setupTokenModel.create({
+    await this.setupTokenRepository.create({
       tokenHash,
       expiresAt,
       used: false,
@@ -84,7 +82,7 @@ export class BootstrapService {
       .update(rawToken)
       .digest('hex');
 
-    const tokenDoc = await this.setupTokenModel.findOneAndUpdate(
+    const tokenDoc = await this.setupTokenRepository.findOneAndUpdate(
       {
         tokenHash,
         used: false,
@@ -93,11 +91,10 @@ export class BootstrapService {
       {
         $set: { used: true, usedAt: new Date() },
       },
-      { new: true },
     );
 
     if (!tokenDoc) {
-      const usedToken = await this.setupTokenModel.findOne({
+      const usedToken = await this.setupTokenRepository.findOne({
         tokenHash,
         used: true,
       });
@@ -130,7 +127,10 @@ export class BootstrapService {
       throw new ConflictException('System already initialized');
     }
 
-    const session = await this.userModel.db.startSession();
+    // Get access to model for session/transaction
+    // @ts-ignore - reaching into protected model for transactions
+    const model = this.userRepository.entityModel;
+    const session = await model.db.startSession();
     session.startTransaction();
 
     try {
@@ -140,7 +140,7 @@ export class BootstrapService {
       const passwordHash = await bcrypt.hash(dto.password, bcryptRounds);
 
       // ⭐ Create super admin WITHOUT tenantId (global admin)
-      const [adminUser] = await this.userModel.create(
+      const [adminUser] = await model.create(
         [
           {
             email: dto.email.toLowerCase().trim(),

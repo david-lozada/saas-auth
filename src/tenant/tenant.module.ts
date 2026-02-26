@@ -4,12 +4,14 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { Tenant, TenantSchema } from '../schemas/tenant.schema';
 import { TenantMiddleware } from './tenant.middleware';
 import { TenantController } from './tenant.controller';
+import { TenantRepository } from './repositories/tenant.repository';
 
 @Module({
   imports: [
-    MongooseModule.forFeature([{ name: Tenant.name, schema: TenantSchema }])
+    MongooseModule.forFeature([{ name: Tenant.name, schema: TenantSchema }]),
   ],
   controllers: [TenantController],
-  exports: [MongooseModule], // Export so other modules can use TenantModel
+  providers: [TenantRepository],
+  exports: [TenantRepository, MongooseModule], // Export TenantRepository
 })
 export class TenantModule {}

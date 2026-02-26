@@ -1,30 +1,33 @@
-import { Injectable, ForbiddenException, ConflictException, BadRequestException } from '@nestjs/common';
-import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import {
+  Injectable,
+  ForbiddenException,
+  ConflictException,
+  BadRequestException,
+} from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
-import { User, UserDocument } from '../schemas/user.schema';
-import { Invite, InviteDocument } from '../schemas/invite.schema';
-import { Device, DeviceDocument } from '../schemas/device.schema';
 import { ROLES } from '../common/constants/roles';
 import { CreateUserDto, InviteUserDto } from './dto';
-import { TenantContextDto, CredentialsDto } from '../auth/dto';
+import { TenantContextDto } from '../auth/dto';
+import { UserRepository } from '../auth/repositories/user.repository';
+import { InviteRepository } from '../auth/repositories/invite.repository';
+import { DeviceRepository } from '../auth/repositories/device.repository';
 
 @Injectable()
 export class AdminService {
   constructor(
-    @InjectModel(User.name) private userModel: Model<UserDocument>,
-    @InjectModel(Invite.name) private inviteModel: Model<InviteDocument>,
-    @InjectModel(Device.name) private deviceModel: Model<DeviceDocument>,
+    private userRepository: UserRepository,
+    private inviteRepository: InviteRepository,
+    private deviceRepository: DeviceRepository,
   ) {}
 
   async createUser(
     context: TenantContextDto,
     adminId: string,
-    dto: CreateUserDto
+    dto: CreateUserDto,
   ) {
     // Verify admin exists and is active
-    const admin = await this.userModel.findOne({
+    const admin = await this.userRepository.findOne({
       _id: adminId,
       tenantId: context.tenantId,
       roles: { $in: [ROLES.ADMIN] },
@@ -36,20 +39,21 @@ export class AdminService {
     }
 
     // Check if user already exists
-    const existing = await this.userModel.findOne({
-      email: dto.email.toLowerCase(),
-      tenantId: context.tenantId,
-    });
+    const existing = await this.userRepository.findByEmail(
+      dto.email,
+      context.tenantId,
+    );
 
     if (existing) {
       throw new ConflictException('User already exists in this tenant');
     }
 
     // Generate temporary password if not provided
-    const tempPassword = dto.tempPassword || crypto.randomBytes(12).toString('hex');
+    const tempPassword =
+      dto.tempPassword || crypto.randomBytes(12).toString('hex');
     const hashedPassword = await bcrypt.hash(tempPassword, 12);
 
-    const user = await this.userModel.create({
+    const user = await this.userRepository.create({
       email: dto.email.toLowerCase().trim(),
       password: hashedPassword,
       tenantId: context.tenantId,
@@ -62,7 +66,7 @@ export class AdminService {
     // TODO: Send email with temporary password
 
     return {
-      id: user._id.toString(),
+      id: (user as any)._id.toString(),
       email: user.email,
       roles: user.roles,
       tempPassword, // Remove in production - for testing only
@@ -73,10 +77,10 @@ export class AdminService {
   async inviteUser(
     context: TenantContextDto,
     adminId: string,
-    dto: InviteUserDto
+    dto: InviteUserDto,
   ) {
     // Verify admin
-    const admin = await this.userModel.findOne({
+    const admin = await this.userRepository.findOne({
       _id: adminId,
       tenantId: context.tenantId,
       roles: { $in: [ROLES.ADMIN] },
@@ -88,10 +92,10 @@ export class AdminService {
     }
 
     // Check if user already exists
-    const existing = await this.userModel.findOne({
-      email: dto.email.toLowerCase(),
-      tenantId: context.tenantId,
-    });
+    const existing = await this.userRepository.findByEmail(
+      dto.email,
+      context.tenantId,
+    );
 
     if (existing) {
       throw new ConflictException('User already exists');
@@ -100,7 +104,7 @@ export class AdminService {
     // Generate unique invite code
     const code = crypto.randomBytes(32).toString('hex');
 
-    const invite = await this.inviteModel.create({
+    const invite = await this.inviteRepository.create({
       code,
       email: dto.email.toLowerCase(),
       tenantId: context.tenantId,
@@ -122,7 +126,7 @@ export class AdminService {
 
   async listUsers(context: TenantContextDto, adminId: string) {
     // Verify admin
-    const admin = await this.userModel.findOne({
+    const admin = await this.userRepository.findOne({
       _id: adminId,
       tenantId: context.tenantId,
       roles: { $in: [ROLES.ADMIN] },
@@ -133,19 +137,19 @@ export class AdminService {
       throw new ForbiddenException('Admin access required');
     }
 
-    return this.userModel
-      .find({ tenantId: context.tenantId })
-      .select('-password -refreshToken')
-      .sort({ createdAt: -1 });
+    return this.userRepository.find(
+      { tenantId: context.tenantId },
+      { password: 0, refreshToken: 0 },
+    );
   }
 
   async getUserDetails(
     context: TenantContextDto,
     adminId: string,
-    userId: string
+    userId: string,
   ) {
     // Verify admin
-    const admin = await this.userModel.findOne({
+    const admin = await this.userRepository.findOne({
       _id: adminId,
       tenantId: context.tenantId,
       roles: { $in: [ROLES.ADMIN] },
@@ -156,20 +160,20 @@ export class AdminService {
       throw new ForbiddenException('Admin access required');
     }
 
-    const user = await this.userModel.findOne({
-      _id: userId,
-      tenantId: context.tenantId,
-    }).select('-password -refreshToken');
+    const user = await this.userRepository.findOne(
+      { _id: userId, tenantId: context.tenantId },
+      { password: 0, refreshToken: 0 },
+    );
 
     if (!user) {
       throw new BadRequestException('User not found');
     }
 
     // Get user's devices
-    const devices = await this.deviceModel
-      .find({ userId, tenantId: context.tenantId })
-      .select('-pushToken')
-      .sort({ lastUsedAt: -1 });
+    const devices = await this.deviceRepository.find(
+      { userId, tenantId: context.tenantId },
+      { pushToken: 0 },
+    );
 
     return {
       user,
@@ -180,7 +184,7 @@ export class AdminService {
   async deactivateUser(
     context: TenantContextDto,
     adminId: string,
-    userId: string
+    userId: string,
   ) {
     // Prevent self-deactivation
     if (userId === adminId) {
@@ -188,7 +192,7 @@ export class AdminService {
     }
 
     // Verify admin
-    const admin = await this.userModel.findOne({
+    const admin = await this.userRepository.findOne({
       _id: adminId,
       tenantId: context.tenantId,
       roles: { $in: [ROLES.ADMIN] },
@@ -200,10 +204,9 @@ export class AdminService {
     }
 
     // Deactivate user
-    const user = await this.userModel.findOneAndUpdate(
+    const user = await this.userRepository.findOneAndUpdate(
       { _id: userId, tenantId: context.tenantId },
       { isActive: false },
-      { new: true }
     );
 
     if (!user) {
@@ -211,13 +214,10 @@ export class AdminService {
     }
 
     // Deactivate all devices
-    await this.deviceModel.updateMany(
-      { userId, tenantId: context.tenantId },
-      { isActive: false }
-    );
+    await this.deviceRepository.deactivateUserDevices(userId, context.tenantId);
 
     // Invalidate refresh token
-    await this.userModel.findByIdAndUpdate(userId, { refreshToken: null });
+    await this.userRepository.updateRefreshToken(userId, null);
 
     return {
       message: 'User deactivated successfully',
@@ -229,10 +229,10 @@ export class AdminService {
   async reactivateUser(
     context: TenantContextDto,
     adminId: string,
-    userId: string
+    userId: string,
   ) {
     // Verify admin
-    const admin = await this.userModel.findOne({
+    const admin = await this.userRepository.findOne({
       _id: adminId,
       tenantId: context.tenantId,
       roles: { $in: [ROLES.ADMIN] },
@@ -243,19 +243,22 @@ export class AdminService {
       throw new ForbiddenException('Admin access required');
     }
 
-    const user = await this.userModel.findOneAndUpdate(
+    const user = await this.userRepository.findOneAndUpdate(
       { _id: userId, tenantId: context.tenantId },
       { isActive: true },
-      { new: true }
-    ).select('-password -refreshToken');
+    );
 
     if (!user) {
       throw new BadRequestException('User not found');
     }
 
+    const userObj = user.toObject();
+    delete userObj.password;
+    delete userObj.refreshToken;
+
     return {
       message: 'User reactivated successfully',
-      user,
+      user: userObj,
     };
   }
 
@@ -263,24 +266,26 @@ export class AdminService {
     context: TenantContextDto,
     adminId: string,
     userId: string,
-    roles: string[]
+    roles: string[],
   ) {
     // Prevent self-demotion (ensure at least one admin remains)
     if (userId === adminId && !roles.includes(ROLES.ADMIN)) {
-      const adminCount = await this.userModel.countDocuments({
+      const adminCount = await this.userRepository.findOne({
         tenantId: context.tenantId,
         roles: { $in: [ROLES.ADMIN] },
         isActive: true,
         _id: { $ne: adminId },
       });
 
-      if (adminCount === 0) {
-        throw new BadRequestException('Cannot remove admin role from the only admin');
+      if (!adminCount) {
+        throw new BadRequestException(
+          'Cannot remove admin role from the only admin',
+        );
       }
     }
 
     // Verify admin
-    const admin = await this.userModel.findOne({
+    const admin = await this.userRepository.findOne({
       _id: adminId,
       tenantId: context.tenantId,
       roles: { $in: [ROLES.ADMIN] },
@@ -291,29 +296,32 @@ export class AdminService {
       throw new ForbiddenException('Admin access required');
     }
 
-    const user = await this.userModel.findOneAndUpdate(
+    const user = await this.userRepository.findOneAndUpdate(
       { _id: userId, tenantId: context.tenantId },
       { roles },
-      { new: true }
-    ).select('-password -refreshToken');
+    );
 
     if (!user) {
       throw new BadRequestException('User not found');
     }
 
+    const userObj = user.toObject();
+    delete userObj.password;
+    delete userObj.refreshToken;
+
     return {
       message: 'User roles updated',
-      user,
+      user: userObj,
     };
   }
 
   async revokeDevice(
     context: TenantContextDto,
     adminId: string,
-    deviceId: string
+    deviceId: string,
   ) {
     // Verify admin
-    const admin = await this.userModel.findOne({
+    const admin = await this.userRepository.findOne({
       _id: adminId,
       tenantId: context.tenantId,
       roles: { $in: [ROLES.ADMIN] },
@@ -324,10 +332,9 @@ export class AdminService {
       throw new ForbiddenException('Admin access required');
     }
 
-    const device = await this.deviceModel.findOneAndUpdate(
+    const device = await this.deviceRepository.findOneAndUpdate(
       { deviceId, tenantId: context.tenantId },
       { isActive: false },
-      { new: true }
     );
 
     if (!device) {
@@ -335,14 +342,13 @@ export class AdminService {
     }
 
     // Check if user has any active devices left
-    const activeDevices = await this.deviceModel.countDocuments({
-      userId: device.userId,
-      tenantId: context.tenantId,
-      isActive: true,
-    });
+    const activeDevicesCount = await this.deviceRepository.countActiveDevices(
+      device.userId,
+      context.tenantId,
+    );
 
-    if (activeDevices === 0) {
-      await this.userModel.findByIdAndUpdate(device.userId, { refreshToken: null });
+    if (activeDevicesCount === 0) {
+      await this.userRepository.updateRefreshToken(device.userId, null);
     }
 
     return {
@@ -354,7 +360,7 @@ export class AdminService {
 
   async getTenantStats(context: TenantContextDto, adminId: string) {
     // Verify admin
-    const admin = await this.userModel.findOne({
+    const admin = await this.userRepository.findOne({
       _id: adminId,
       tenantId: context.tenantId,
       roles: { $in: [ROLES.ADMIN] },
@@ -365,12 +371,28 @@ export class AdminService {
       throw new ForbiddenException('Admin access required');
     }
 
-    const [totalUsers, activeUsers, inactiveUsers, totalDevices, activeDevices] = await Promise.all([
-      this.userModel.countDocuments({ tenantId: context.tenantId }),
-      this.userModel.countDocuments({ tenantId: context.tenantId, isActive: true }),
-      this.userModel.countDocuments({ tenantId: context.tenantId, isActive: false }),
-      this.deviceModel.countDocuments({ tenantId: context.tenantId }),
-      this.deviceModel.countDocuments({ tenantId: context.tenantId, isActive: true }),
+    const [
+      totalUsers,
+      activeUsers,
+      inactiveUsers,
+      totalDevices,
+      activeDevices,
+    ] = await Promise.all([
+      this.userRepository
+        .find({ tenantId: context.tenantId })
+        .then((u) => u.length),
+      this.userRepository
+        .find({ tenantId: context.tenantId, isActive: true })
+        .then((u) => u.length),
+      this.userRepository
+        .find({ tenantId: context.tenantId, isActive: false })
+        .then((u) => u.length),
+      this.deviceRepository
+        .find({ tenantId: context.tenantId })
+        .then((d) => d.length),
+      this.deviceRepository
+        .find({ tenantId: context.tenantId, isActive: true })
+        .then((d) => d.length),
     ]);
 
     return {

@@ -1,7 +1,7 @@
 import { Module, Global } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { Plan, PlanSchema } from '../schemas/plan.schema';
-import { Tenant, TenantSchema } from '../schemas/tenant.schema';
+import { TenantModule } from '../tenant/tenant.module';
 import {
   PagoMovilTransaction,
   PagoMovilTransactionSchema,
@@ -19,16 +19,20 @@ import { PagoMovilController } from './pago-movil.controller';
 import { WebhooksController } from './webhooks.controller';
 import { ConfigModule } from '@nestjs/config';
 
+import { PlanRepository } from './repositories/plan.repository';
+import { PagoMovilTransactionRepository } from './repositories/pago-movil-transaction.repository';
+import { PagoMovilConfigRepository } from './repositories/pago-movil-config.repository';
+
 @Global()
 @Module({
   imports: [
     MongooseModule.forFeature([
       { name: Plan.name, schema: PlanSchema },
-      { name: Tenant.name, schema: TenantSchema },
       { name: PagoMovilTransaction.name, schema: PagoMovilTransactionSchema },
       { name: PagoMovilConfig.name, schema: PagoMovilConfigSchema },
     ]),
     ConfigModule,
+    TenantModule,
   ],
   controllers: [
     SubscriptionController,
@@ -36,12 +40,18 @@ import { ConfigModule } from '@nestjs/config';
     PagoMovilController,
   ],
   providers: [
+    PlanRepository,
+    PagoMovilTransactionRepository,
+    PagoMovilConfigRepository,
     SubscriptionService,
     StripeService,
     BinancePayService,
     PagoMovilService,
   ],
   exports: [
+    PlanRepository,
+    PagoMovilTransactionRepository,
+    PagoMovilConfigRepository,
     SubscriptionService,
     StripeService,
     BinancePayService,

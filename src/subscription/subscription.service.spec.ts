@@ -1,17 +1,16 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { getModelToken } from '@nestjs/mongoose';
 import { SubscriptionService } from './subscription.service';
 import { StripeService } from './stripe.service';
 import { BinancePayService } from './binance-pay.service';
 import { ConfigService } from '@nestjs/config';
-import { Plan } from '../schemas/plan.schema';
-import { Tenant } from '../schemas/tenant.schema';
+import { PlanRepository } from './repositories/plan.repository';
+import { TenantRepository } from '../tenant/repositories/tenant.repository';
 import { NotFoundException, BadRequestException } from '@nestjs/common';
 
 describe('SubscriptionService', () => {
   let service: SubscriptionService;
-  let planModel: any;
-  let tenantModel: any;
+  let planRepository: any;
+  let tenantRepository: any;
   let stripeService: any;
 
   const mockPlan = {
@@ -19,6 +18,9 @@ describe('SubscriptionService', () => {
     name: 'pro_tier',
     priceId: 'price_abc',
     features: ['analytics'],
+    label: 'Pro',
+    amount: 2900,
+    interval: 'month',
   };
 
   const mockTenant = {
@@ -31,21 +33,21 @@ describe('SubscriptionService', () => {
   };
 
   beforeEach(async () => {
-    planModel = {
-      find: jest.fn().mockReturnThis(),
+    planRepository = {
+      findActivePlans: jest.fn(),
       findById: jest.fn(),
-      findOne: jest.fn(),
-      sort: jest.fn().mockReturnThis(),
-      exec: jest.fn(),
+      create: jest.fn(),
+      findOneAndUpdate: jest.fn(),
     };
 
-    tenantModel = {
-      findById: jest.fn().mockReturnThis(),
-      findByIdAndUpdate: jest.fn().mockReturnThis(),
-      findOneAndUpdate: jest.fn().mockReturnThis(),
-      populate: jest.fn().mockReturnThis(),
-      exec: jest.fn(),
-      lean: jest.fn(),
+    tenantRepository = {
+      findById: jest.fn(),
+      findByIdWithPlan: jest.fn(),
+      findByIdWithPlanLean: jest.fn(),
+      findByIdLean: jest.fn(),
+      findByIdAndUpdate: jest.fn(),
+      findByIdAndUpdateWithPlan: jest.fn(),
+      updateSubscriptionStatusBySubId: jest.fn(),
     };
 
     stripeService = {
@@ -62,12 +64,12 @@ describe('SubscriptionService', () => {
       providers: [
         SubscriptionService,
         {
-          provide: getModelToken(Plan.name),
-          useValue: planModel,
+          provide: PlanRepository,
+          useValue: planRepository,
         },
         {
-          provide: getModelToken(Tenant.name),
-          useValue: tenantModel,
+          provide: TenantRepository,
+          useValue: tenantRepository,
         },
         {
           provide: StripeService,
@@ -96,17 +98,15 @@ describe('SubscriptionService', () => {
   });
 
   it('should list active plans', async () => {
-    planModel.find.mockReturnValue({
-      sort: jest.fn().mockResolvedValue([mockPlan]),
-    });
+    planRepository.findActivePlans.mockResolvedValue([mockPlan]);
     const plans = await service.listPlans();
     expect(plans).toContain(mockPlan);
-    expect(planModel.find).toHaveBeenCalledWith({ isActive: true });
+    expect(planRepository.findActivePlans).toHaveBeenCalled();
   });
 
   it('should create a checkout session', async () => {
-    tenantModel.findById.mockResolvedValue(mockTenant);
-    planModel.findById.mockResolvedValue(mockPlan);
+    tenantRepository.findById.mockResolvedValue(mockTenant);
+    planRepository.findById.mockResolvedValue(mockPlan);
     stripeService.createCheckoutSession.mockResolvedValue({
       url: 'http://stripe-url',
     });
@@ -125,8 +125,8 @@ describe('SubscriptionService', () => {
   });
 
   it('should throw if plan has no priceId', async () => {
-    tenantModel.findById.mockResolvedValue(mockTenant);
-    planModel.findById.mockResolvedValue({ ...mockPlan, priceId: null });
+    tenantRepository.findById.mockResolvedValue(mockTenant);
+    planRepository.findById.mockResolvedValue({ ...mockPlan, priceId: null });
 
     const context = { tenantId: 'tenant_123' } as any;
     await expect(
@@ -135,9 +135,7 @@ describe('SubscriptionService', () => {
   });
 
   it('should check for features correctly', async () => {
-    tenantModel.findById.mockReturnThis();
-    tenantModel.populate.mockReturnThis();
-    tenantModel.lean.mockResolvedValue({
+    tenantRepository.findByIdWithPlanLean.mockResolvedValue({
       plan: mockPlan,
     });
 
@@ -149,8 +147,8 @@ describe('SubscriptionService', () => {
   });
 
   it('should create a Binance Pay order', async () => {
-    tenantModel.findById.mockResolvedValue(mockTenant);
-    planModel.findById.mockResolvedValue(mockPlan);
+    tenantRepository.findById.mockResolvedValue(mockTenant);
+    planRepository.findById.mockResolvedValue(mockPlan);
     const binancePayService = service['binancePayService'] as any;
     binancePayService.createOrder.mockResolvedValue({
       checkoutUrl: 'http://binance-url',

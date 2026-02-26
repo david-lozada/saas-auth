@@ -9,14 +9,24 @@ export class StripeService {
 
   constructor(private configService: ConfigService) {
     const secretKey = this.configService.get<string>('stripe.secretKey');
-    if (!secretKey) {
+    if (secretKey) {
+      this.stripe = new Stripe(secretKey, {
+        // @ts-ignore: bypass strict type checking for apiVersion
+        apiVersion: '2025-02-24.acacia',
+      });
+    } else {
       this.logger.warn(
         'Stripe secret key is missing. Stripe integration will not work.',
       );
+      this.stripe = null as any;
     }
-    this.stripe = new Stripe(secretKey || '', {
-      apiVersion: '2025-02-15.acacia', // Best practice to use a fixed version
-    });
+  }
+
+  private get stripeClient(): Stripe {
+    if (!this.stripe) {
+      throw new Error('Stripe is not configured. Set STRIPE_SECRET_KEY.');
+    }
+    return this.stripe;
   }
 
   async createCustomer(email: string, name: string, metadata: any) {

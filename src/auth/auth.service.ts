@@ -4,15 +4,12 @@ import {
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
-import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
-import { ApiProperty } from '@nestjs/swagger';
 import * as bcrypt from 'bcrypt';
 import { JwtService, TokenExpiredError } from '@nestjs/jwt';
-import { Device, DeviceDocument } from '../schemas/device.schema';
-import { Invite, InviteDocument } from '../schemas/invite.schema';
-import { Tenant, TenantDocument } from '../schemas/tenant.schema';
-import { User, UserDocument } from '../schemas/user.schema';
+import { UserRepository } from './repositories/user.repository';
+import { InviteRepository } from './repositories/invite.repository';
+import { DeviceRepository } from './repositories/device.repository';
+import { TenantRepository } from '../tenant/repositories/tenant.repository';
 import {
   CredentialsDto,
   DeviceDto,
@@ -25,14 +22,18 @@ import {
 import { Role, ROLES } from '../common/constants/roles';
 import { ConfigService } from '@nestjs/config';
 import { JwtConfig, SecurityConfig } from '../config/config.types';
+import { User, UserDocument } from '../schemas/user.schema';
+import { DeviceDocument } from '../schemas/device.schema';
+import { InviteDocument } from '../schemas/invite.schema';
+import { TenantDocument } from '../schemas/tenant.schema';
 
 @Injectable()
 export class AuthService {
   constructor(
-    @InjectModel(Tenant.name) private tenantModel: Model<TenantDocument>,
-    @InjectModel(Invite.name) private inviteModel: Model<InviteDocument>,
-    @InjectModel(User.name) private userModel: Model<UserDocument>,
-    @InjectModel(Device.name) private deviceModel: Model<DeviceDocument>,
+    private userRepository: UserRepository,
+    private inviteRepository: InviteRepository,
+    private deviceRepository: DeviceRepository,
+    private tenantRepository: TenantRepository,
     private jwtService: JwtService,
     private configService: ConfigService<{
       jwt: JwtConfig;
@@ -167,37 +168,32 @@ export class AuthService {
       }
 
       if (device?.deviceId) {
-        const deviceRecord = await this.deviceModel.findOne({
-          deviceId: device.deviceId,
-          tenantId: context.tenantId,
-          isActive: true,
-        });
+        const deviceRecord = await this.deviceRepository.findActiveDevice(
+          device.deviceId,
+          context.tenantId,
+        );
         if (!deviceRecord) {
           throw new UnauthorizedException('Device deactivated or not found');
         }
       }
 
-      const user = await this.userModel.findById(payload.sub);
+      const user = await this.userRepository.findById(payload.sub);
       if (!user?.refreshToken)
         throw new UnauthorizedException('Session expired, please log in again');
 
       const isMatch = await bcrypt.compare(refreshToken, user.refreshToken);
       if (!isMatch) {
-        await this.userModel.findByIdAndUpdate(user._id, {
-          refreshToken: null,
-        });
-        await this.deviceModel.updateMany(
-          { userId: user._id.toString() },
-          { isActive: false },
-        );
+        await this.userRepository.updateRefreshToken(user._id.toString(), null);
+        await this.deviceRepository.deactivateUserDevices(user._id.toString());
         throw new UnauthorizedException(
           'Security violation detected. All sessions have been revoked. Please log in again.',
         );
       }
       if (device?.deviceId) {
-        await this.deviceModel.findOneAndUpdate(
-          { deviceId: device.deviceId, tenantId: context.tenantId },
-          { lastUsedAt: new Date() },
+        await this.deviceRepository.upsertDevice(
+          user._id.toString(),
+          context.tenantId,
+          device,
         );
       }
 
@@ -225,20 +221,19 @@ export class AuthService {
     device?: Pick<DeviceDocument, 'deviceId'>,
   ) {
     if (device?.deviceId) {
-      await this.deviceModel.findOneAndUpdate(
+      await this.deviceRepository.findOneAndUpdate(
         { deviceId: device.deviceId, tenantId: context.tenantId, userId },
         { isActive: false },
       );
-      const activeDevices = await this.deviceModel.countDocuments({
-        tenantId: context.tenantId,
+      const activeDevices = await this.deviceRepository.countActiveDevices(
         userId,
-        isActive: true,
-      });
+        context.tenantId,
+      );
       if (activeDevices === 0) {
-        await this.userModel.findByIdAndUpdate(userId, { refreshToken: null });
+        await this.userRepository.updateRefreshToken(userId, null);
       }
     } else {
-      await this.userModel.findByIdAndUpdate(
+      await this.userRepository.findOneAndUpdate(
         { _id: userId, tenantId: context.tenantId },
         { refreshToken: null },
       );
@@ -246,11 +241,8 @@ export class AuthService {
   }
 
   async logoutAllDevices(tenantId: string, userId: string) {
-    await this.deviceModel.updateMany(
-      { tenantId, userId },
-      { isActive: false },
-    );
-    await this.userModel.findByIdAndUpdate(userId, { refreshToken: null });
+    await this.deviceRepository.deactivateUserDevices(userId, tenantId);
+    await this.userRepository.updateRefreshToken(userId, null);
   }
 
   // ============================================
@@ -258,22 +250,23 @@ export class AuthService {
   // ============================================
 
   async getProfile(tenantId: string, userId: string) {
-    const user = await this.userModel
-      .findOne({
-        _id: userId,
-        tenantId,
-      })
-      .select('-password -refreshToken');
+    const user = await this.userRepository.findByTenantId(tenantId, userId);
 
     if (!user) throw new UnauthorizedException('User not found');
-    return user;
+    const userObj = user.toObject();
+    delete userObj.password;
+    delete userObj.refreshToken;
+    return userObj;
   }
 
   async getUserDevices(tenantId: string, userId: string) {
-    return this.deviceModel
-      .find({ userId, tenantId })
-      .select('-pushToken')
-      .sort({ lastUsedAt: -1 });
+    return this.deviceRepository
+      .find({ userId, tenantId }, { pushToken: 0 })
+      .then((devices) =>
+        devices.sort(
+          (a: any, b: any) => b.lastUsedAt.getTime() - a.lastUsedAt.getTime(),
+        ),
+      );
   }
 
   async changePassword(
@@ -282,7 +275,7 @@ export class AuthService {
     oldPassword: string,
     newPassword: string,
   ) {
-    const user = await this.userModel.findOne({ _id: userId, tenantId });
+    const user = await this.userRepository.findByTenantId(tenantId, userId);
     if (!user) throw new UnauthorizedException('User not found');
 
     const isMatch = await bcrypt.compare(oldPassword, user.password);
@@ -290,10 +283,13 @@ export class AuthService {
       throw new BadRequestException('Current password is incorrect');
 
     const hashedPassword = await bcrypt.hash(newPassword, 12);
-    await this.userModel.findByIdAndUpdate(userId, {
-      password: hashedPassword,
-      mustChangePassword: false,
-    });
+    await this.userRepository.findOneAndUpdate(
+      { _id: userId },
+      {
+        password: hashedPassword,
+        mustChangePassword: false,
+      },
+    );
 
     await this.logoutAllDevices(tenantId, userId);
 
@@ -310,11 +306,10 @@ export class AuthService {
   ): Promise<
     Omit<User, 'password' | 'refreshToken' | 'tenantId'> & { _id: any }
   > {
-    const user = await this.userModel.findOne({
-      email: credentials.email.toLowerCase().trim(),
+    const user = await this.userRepository.findByEmail(
+      credentials.email,
       tenantId,
-      isActive: true,
-    });
+    );
     if (!user) throw new UnauthorizedException('Invalid credentials');
 
     // Block super admin login on regular endpoints
@@ -333,7 +328,7 @@ export class AuthService {
       );
     }
     const { tenantId: _, password, refreshToken, ...result } = user.toObject();
-    return result;
+    return result as any;
   }
 
   async validateSuperAdminCredentials(
@@ -341,12 +336,7 @@ export class AuthService {
   ): Promise<
     Omit<User, 'password' | 'refreshToken' | 'tenantId'> & { _id: any }
   > {
-    const user = await this.userModel.findOne({
-      email: credentials.email.toLowerCase().trim(),
-      tenantId: { $exists: false }, // Super admin has no tenantId
-      roles: ROLES.SUPERADMIN,
-      isActive: true,
-    });
+    const user = await this.userRepository.findByEmail(credentials.email);
 
     if (!user)
       throw new UnauthorizedException('Invalid super admin credentials');
@@ -356,19 +346,16 @@ export class AuthService {
       throw new UnauthorizedException('Invalid super admin credentials');
 
     const { tenantId: _, password, refreshToken, ...result } = user.toObject();
-    return result;
+    return result as any;
   }
 
   private async validateTenant(tenantId: string): Promise<TenantDocument> {
-    const tenant = await this.tenantModel.findOne({
-      slug: tenantId,
-      isActive: true,
-    });
+    const tenant = await this.tenantRepository.findBySlugLean(tenantId);
     if (!tenant)
       throw new UnauthorizedException(
         `Tenant with ID ${tenantId} not found or inactive`,
       );
-    return tenant;
+    return tenant as TenantDocument;
   }
 
   private async validateInvite(
@@ -376,13 +363,11 @@ export class AuthService {
     email: string,
     code: string,
   ): Promise<InviteDocument> {
-    const invite = await this.inviteModel.findOne({
+    const invite = await this.inviteRepository.findValidInvite(
       tenantId,
-      email: email.toLowerCase(),
+      email,
       code,
-      used: false,
-      expiresAt: { $gt: new Date() },
-    });
+    );
     if (!invite)
       throw new UnauthorizedException('Invalid or expired invite code');
     return invite;
@@ -395,10 +380,10 @@ export class AuthService {
     mustChangePassword?: boolean;
   }) {
     const { tenantId, credentials, roles, mustChangePassword } = data;
-    const existing = await this.userModel.findOne({
-      email: credentials.email.toLowerCase().trim(),
+    const existing = await this.userRepository.findByEmail(
+      credentials.email,
       tenantId,
-    });
+    );
 
     if (existing) {
       throw new UnauthorizedException(
@@ -406,7 +391,7 @@ export class AuthService {
       );
     }
     const hashedPassword = await bcrypt.hash(credentials.password, 12);
-    const user = await this.userModel.create({
+    const user = await this.userRepository.create({
       email: credentials.email.toLowerCase().trim(),
       password: hashedPassword,
       tenantId,
@@ -416,7 +401,7 @@ export class AuthService {
     });
 
     return {
-      id: user._id.toString(),
+      id: (user as any)._id.toString(),
       email: user.email,
       roles: user.roles,
       tenantId: user.tenantId,
@@ -472,9 +457,10 @@ export class AuthService {
       ),
     ]);
     const refreshHash = await bcrypt.hash(refreshToken, 12);
-    await this.userModel.findByIdAndUpdate(user._id, {
-      refreshToken: refreshHash,
-    });
+    await this.userRepository.updateRefreshToken(
+      user._id.toString(),
+      refreshHash,
+    );
 
     return {
       accessToken,
@@ -485,7 +471,7 @@ export class AuthService {
   }
 
   private async getUserOrThrow(userId: string): Promise<UserDocument> {
-    const user = await this.userModel.findById(userId);
+    const user = await this.userRepository.findById(userId);
     if (!user) {
       throw new UnauthorizedException('User not found');
     }
@@ -497,20 +483,14 @@ export class AuthService {
     userId: string;
     device: DeviceDto;
   }) {
-    await this.deviceModel.findOneAndUpdate(
-      {
-        deviceId: data.device.deviceId,
-        tenantId: data.tenantId,
-        userId: data.userId,
-      },
-      { ...data.device },
-      { upsert: true, new: true },
+    await this.deviceRepository.upsertDevice(
+      data.userId,
+      data.tenantId,
+      data.device,
     );
   }
 
   private async updateLastLogin(userId: string) {
-    await this.userModel.findByIdAndUpdate(userId, {
-      lastLogin: new Date(),
-    });
+    await this.userRepository.updateLastLogin(userId);
   }
 }

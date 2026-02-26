@@ -1,24 +1,26 @@
-import { Controller, Get, Param, NotFoundException, Query, BadRequestException } from "@nestjs/common";
-import { InjectModel } from "@nestjs/mongoose";
-import { Model } from "mongoose";
-import { Tenant, TenantDocument } from "../schemas/tenant.schema";
-import { Public } from "../auth/decorators/public.decorator";
+import {
+  Controller,
+  Get,
+  Param,
+  NotFoundException,
+  Query,
+  BadRequestException,
+} from '@nestjs/common';
+import { TenantRepository } from './repositories/tenant.repository';
+import { Public } from '../auth/decorators/public.decorator';
 
-@Controller("tenants")
+@Controller('tenants')
 export class TenantController {
-  constructor(
-    @InjectModel(Tenant.name) private tenantModel: Model<TenantDocument>,
-  ) {}
+  constructor(private tenantRepository: TenantRepository) {}
 
   @Public()
-  @Get("verify/:slug")
-  async verifyTenant(@Param("slug") slug: string) {
-    const tenant = await this.tenantModel.findOne({
-      slug: slug.toLowerCase().trim(),
-      isActive: true,
-    });
+  @Get('verify/:slug')
+  async verifyTenant(@Param('slug') slug: string) {
+    const tenant = await this.tenantRepository.findBySlugLean(
+      slug.toLowerCase().trim(),
+    );
 
-    if (!tenant) throw new NotFoundException("Organization not found");
+    if (!tenant) throw new NotFoundException('Organization not found');
 
     return {
       slug: tenant.slug,
@@ -30,16 +32,15 @@ export class TenantController {
   }
 
   @Public()
-  @Get("detect")
-  async detectByDomain(@Query("domain") domain: string) {
-    if (!domain) throw new BadRequestException("Domain required");
+  @Get('detect')
+  async detectByDomain(@Query('domain') domain: string) {
+    if (!domain) throw new BadRequestException('Domain required');
 
-    const tenant = await this.tenantModel.findOne({
-      isActive: true,
-      "settings.allowedDomains": domain.toLowerCase(),
-    });
+    const tenant = await this.tenantRepository.findByDomainLean(
+      domain.toLowerCase(),
+    );
 
-    if (!tenant) throw new NotFoundException("Unknown domain");
+    if (!tenant) throw new NotFoundException('Unknown domain');
 
     return { slug: tenant.slug, name: tenant.name };
   }

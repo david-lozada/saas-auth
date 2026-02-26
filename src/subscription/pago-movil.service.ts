@@ -5,9 +5,9 @@ import {
   ForbiddenException,
   Logger,
 } from '@nestjs/common';
-import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
 import { ConfigService } from '@nestjs/config';
+import { PagoMovilTransactionRepository } from './repositories/pago-movil-transaction.repository';
+import { PagoMovilConfigRepository } from './repositories/pago-movil-config.repository';
 import {
   PagoMovilTransaction,
   PagoMovilTransactionDocument,
@@ -60,18 +60,14 @@ export class PagoMovilService {
   private readonly logger = new Logger(PagoMovilService.name);
 
   constructor(
-    @InjectModel(PagoMovilTransaction.name)
-    private transactionModel: Model<PagoMovilTransactionDocument>,
-    @InjectModel(PagoMovilConfig.name)
-    private configModel: Model<PagoMovilConfigDocument>,
+    private transactionRepository: PagoMovilTransactionRepository,
+    private configRepository: PagoMovilConfigRepository,
     private configService: ConfigService,
     private subscriptionService: SubscriptionService,
   ) {}
 
   async getTenantConfig(tenantId: string) {
-    const config = await this.configModel
-      .findOne({ tenantId, enabled: true })
-      .lean();
+    const config = await this.configRepository.findByTenantIdLean(tenantId);
 
     if (!config) {
       throw new NotFoundException('Pago Móvil not enabled for this tenant');
@@ -96,10 +92,9 @@ export class PagoMovilService {
     userId: string,
     dto: InitiatePagoMovilDto,
   ) {
-    const config = await this.configModel.findOne({
-      tenantId: context.tenantId,
-      enabled: true,
-    });
+    const config = await this.configRepository.findByTenantIdLean(
+      context.tenantId,
+    );
 
     if (!config) {
       throw new BadRequestException('Pago Móvil not available');
@@ -114,11 +109,11 @@ export class PagoMovilService {
       );
     }
 
-    const existingPending = await this.transactionModel.findOne({
-      userId,
-      tenantId: context.tenantId,
-      status: { $in: [PagoMovilStatus.PENDING, PagoMovilStatus.UNDER_REVIEW] },
-    });
+    const existingPending =
+      await this.transactionRepository.findPendingTransaction(
+        userId,
+        context.tenantId,
+      );
 
     if (existingPending) {
       throw new BadRequestException(
@@ -126,11 +121,10 @@ export class PagoMovilService {
       );
     }
 
-    const existingRef = await this.transactionModel.findOne({
-      referenceNumber: dto.referenceNumber,
-      bankCode: dto.bankCode,
-      status: { $in: [PagoMovilStatus.APPROVED, PagoMovilStatus.UNDER_REVIEW] },
-    });
+    const existingRef = await this.transactionRepository.findExistingReference(
+      dto.referenceNumber,
+      dto.bankCode,
+    );
 
     if (existingRef) {
       throw new BadRequestException(
@@ -140,7 +134,7 @@ export class PagoMovilService {
 
     const amountVES = Math.round(dto.amountUSD * config.exchangeRate);
 
-    const transaction = await this.transactionModel.create({
+    const transaction = await this.transactionRepository.create({
       userId,
       tenantId: context.tenantId,
       planId: dto.planId,
@@ -173,7 +167,7 @@ export class PagoMovilService {
     userId: string,
     dto: SubmitPaymentProofDto,
   ) {
-    const transaction = await this.transactionModel.findOne({
+    const transaction = await this.transactionRepository.findOne({
       _id: dto.transactionId,
       userId,
       tenantId: context.tenantId,
@@ -187,18 +181,24 @@ export class PagoMovilService {
     }
 
     if (new Date() > transaction.expiresAt) {
-      await this.transactionModel.findByIdAndUpdate(transaction._id, {
-        status: PagoMovilStatus.EXPIRED,
-      });
+      await this.transactionRepository.findByIdAndUpdate(
+        transaction._id.toString(),
+        {
+          status: PagoMovilStatus.EXPIRED,
+        },
+      );
       throw new BadRequestException(
         'Payment window expired. Please initiate new payment.',
       );
     }
 
-    await this.transactionModel.findByIdAndUpdate(transaction._id, {
-      screenshotUrl: dto.screenshotUrl,
-      status: PagoMovilStatus.UNDER_REVIEW,
-    });
+    await this.transactionRepository.findByIdAndUpdate(
+      transaction._id.toString(),
+      {
+        screenshotUrl: dto.screenshotUrl,
+        status: PagoMovilStatus.UNDER_REVIEW,
+      },
+    );
 
     this.logger.log(
       `New Pago Móvil payment pending review: ${transaction._id}`,
@@ -212,34 +212,27 @@ export class PagoMovilService {
   }
 
   async getUserTransactions(userId: string, tenantId: string) {
-    return this.transactionModel
-      .find({ userId, tenantId })
-      .sort({ createdAt: -1 })
-      .lean();
+    return this.transactionRepository.findByUserIdAndTenantId(userId, tenantId);
   }
 
   async getPendingTransactions(tenantId: string, status?: PagoMovilStatus) {
-    const query: any = { tenantId };
+    const statusFilter = status
+      ? { status }
+      : {
+          status: {
+            $in: [PagoMovilStatus.PENDING, PagoMovilStatus.UNDER_REVIEW],
+          },
+        };
 
-    if (status) {
-      query.status = status;
-    } else {
-      query.status = {
-        $in: [PagoMovilStatus.PENDING, PagoMovilStatus.UNDER_REVIEW],
-      };
-    }
-
-    return this.transactionModel
-      .find(query)
-      .populate('userId', 'email profile')
-      .sort({ createdAt: -1 })
-      .lean();
+    return this.transactionRepository.findPendingByTenantId(
+      tenantId,
+      statusFilter,
+    );
   }
 
   async getTransactionDetails(transactionId: string, adminTenantId: string) {
-    const transaction = await this.transactionModel
-      .findById(transactionId)
-      .populate('userId', 'email profile');
+    const transaction =
+      await this.transactionRepository.findByIdWithUser(transactionId);
 
     if (!transaction) {
       throw new NotFoundException('Transaction not found');
@@ -249,23 +242,8 @@ export class PagoMovilService {
       throw new ForbiddenException('Access denied');
     }
 
-    const similarTransactions = await this.transactionModel
-      .find({
-        $or: [
-          {
-            phoneNumber: transaction.phoneNumber,
-            _id: { $ne: transaction._id },
-          },
-          {
-            referenceNumber: transaction.referenceNumber,
-            _id: { $ne: transaction._id },
-          },
-        ],
-        status: { $in: [PagoMovilStatus.APPROVED, PagoMovilStatus.REJECTED] },
-      })
-      .limit(5)
-      .select('status referenceNumber createdAt')
-      .lean();
+    const similarTransactions =
+      await this.transactionRepository.findSimilarTransactions(transaction);
 
     return {
       transaction,
@@ -278,7 +256,9 @@ export class PagoMovilService {
     adminTenantId: string,
     dto: ReviewPagoMovilDto,
   ) {
-    const transaction = await this.transactionModel.findById(dto.transactionId);
+    const transaction = await this.transactionRepository.findById(
+      dto.transactionId,
+    );
 
     if (!transaction) {
       throw new NotFoundException('Transaction not found');
@@ -300,7 +280,7 @@ export class PagoMovilService {
     }
 
     if (dto.action === 'approve') {
-      await this.transactionModel.findByIdAndUpdate(dto.transactionId, {
+      await this.transactionRepository.findByIdAndUpdate(dto.transactionId, {
         status: PagoMovilStatus.APPROVED,
         reviewedBy: adminId,
         reviewedAt: new Date(),
@@ -324,7 +304,7 @@ export class PagoMovilService {
         transactionId: dto.transactionId,
       };
     } else {
-      await this.transactionModel.findByIdAndUpdate(dto.transactionId, {
+      await this.transactionRepository.findByIdAndUpdate(dto.transactionId, {
         status: PagoMovilStatus.REJECTED,
         reviewedBy: adminId,
         reviewedAt: new Date(),
@@ -341,12 +321,6 @@ export class PagoMovilService {
   }
 
   async updateExchangeRate(tenantId: string, rate: number, adminId: string) {
-    return this.configModel.findOneAndUpdate(
-      { tenantId },
-      {
-        exchangeRate: rate,
-      },
-      { upsert: true, new: true },
-    );
+    return this.configRepository.updateExchangeRate(tenantId, rate);
   }
 }

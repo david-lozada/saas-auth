@@ -5,7 +5,6 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { PassportModule } from '@nestjs/passport';
 import { User, UserSchema } from '../schemas/user.schema';
 import { Device, DeviceSchema } from '../schemas/device.schema';
-import { Tenant, TenantSchema } from '../schemas/tenant.schema';
 import { Invite, InviteSchema } from '../schemas/invite.schema';
 import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
@@ -14,6 +13,10 @@ import { JwtStrategy } from './strategies/jwt.strategy';
 import { LocalAuthGuard } from './guards/local-auth.guard';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { RolesGuard } from './guards/roles.guard';
+import { UserRepository } from './repositories/user.repository';
+import { InviteRepository } from './repositories/invite.repository';
+import { DeviceRepository } from './repositories/device.repository';
+import { TenantModule } from '../tenant/tenant.module';
 
 @Module({
   imports: [
@@ -21,9 +24,9 @@ import { RolesGuard } from './guards/roles.guard';
     MongooseModule.forFeature([
       { name: User.name, schema: UserSchema },
       { name: Device.name, schema: DeviceSchema },
-      { name: Tenant.name, schema: TenantSchema },
       { name: Invite.name, schema: InviteSchema },
     ]),
+    TenantModule,
   ],
   controllers: [AuthController],
   providers: [
@@ -35,7 +38,17 @@ import { RolesGuard } from './guards/roles.guard';
     RolesGuard,
     JwtService,
     ConfigService,
+    UserRepository,
+    InviteRepository,
+    DeviceRepository,
   ],
-  exports: [AuthService, JwtAuthGuard, RolesGuard],
+  exports: [
+    AuthService,
+    JwtAuthGuard,
+    RolesGuard,
+    UserRepository,
+    InviteRepository,
+    DeviceRepository,
+  ],
 })
 export class AuthModule {}
